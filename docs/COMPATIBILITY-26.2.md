@@ -21,7 +21,7 @@ The public `MethodInterface` methods from 2.3.0 remain callable. The legacy Bung
 | Velocity | 4.1.0-SNAPSHOT build 14 | Native optional adapter loaded; HSQLDB, commands, aliases, plugin listing, and clean shutdown passed |
 | MySQL | 8.4.10 | Tables, punishment creation, direct SQL inspection, restart, and persisted lookup passed |
 
-Minecraft 26.2 and current Paper require Java 25. Core, Bukkit, and BungeeCord classes remain Java 8 bytecode (`major version 52`) for compatibility with older deployments; the optional Velocity adapter is compiled for Java 25 (`major version 69`).
+Minecraft 26.2 and current Paper require Java 25. Core, Bukkit, BungeeCord, and every class in the legacy combined bundle remain Java 8 bytecode (`major version 52`) for compatibility with older deployments. The optional self-contained Velocity artifact is separate and compiled for Java 25 (`major version 69`).
 
 ## Command compatibility
 
@@ -63,15 +63,15 @@ The Java 25 clean reactor build contains six modules and passes 38 tests:
 - BungeeCord: 5
 - Velocity: 2
 
-The generated bundle contains all three platform descriptors, both database drivers, and the platform entry points. CI builds with Java 25, runs `clean verify`, and publishes artifacts using current GitHub Actions versions. The release workflow's separate Javadoc phase is also reproducible from reactor-installed artifacts.
+The generated legacy bundle contains the Bukkit and Bungee descriptors, both database drivers, and only Java 8-compatible classes. The separate self-contained Velocity artifact contains `velocity-plugin.json` and the same storage implementation. CI builds with Java 25, runs `clean verify`, and publishes both artifacts using current GitHub Actions versions. The release workflow's separate Javadoc phase is also reproducible from reactor-installed artifacts.
 
 ## Installation and synchronization model
 
-Velocity support is optional. Install the combined JAR on exactly the platform responsible for network-wide punishments:
+Velocity support is optional. Install the artifact for the platform responsible for network-wide punishments:
 
-- Bukkit/Paper-only network: install it on the server.
-- BungeeCord network: install it on BungeeCord.
-- Velocity network: install it on Velocity.
+- Bukkit/Paper-only network: install `AdvancedBan-Bundle` on the server.
+- BungeeCord network: install `AdvancedBan-Bundle` on BungeeCord.
+- Velocity network: install `AdvancedBan-Velocity` on Velocity.
 
 For multiple proxy instances, point each instance at the same MySQL database. This provides the same database-backed punishment state used by BungeeCord deployments. The new adapter does not require BungeeCord and does not automatically bridge a simultaneously running BungeeCord and Velocity process.
 
@@ -84,8 +84,12 @@ The following combinations were not available for full end-to-end automation and
 - RedisBungee/Velocity, CloudNet v2/v3, and multiple live proxy instances sharing MySQL.
 - Velocity-to-Bukkit plugin-message bridging. Velocity instead provides native proxy enforcement and database-backed synchronization.
 - Third-party plugin binary tests beyond reflection checks of the 2.3.0 public compatibility surface.
+- The historical Bungee-to-Bukkit `advancedban:main` sender has no authenticated Bukkit receiver in 2.3.0. Enabling a receiver without a shared secret would let client plugin messages attempt native BanList changes, so this PR does not claim plugin messaging as a secure synchronization transport. Proxy enforcement plus shared MySQL is the supported network model.
+- BungeeCord and Velocity currently publish the required development APIs as snapshot coordinates. Pinning a timestamped snapshot would eventually become unavailable under upstream retention, so the POM follows the named upstream snapshot; organizations requiring hermetic builds should mirror the resolved artifacts internally.
+- Concurrent punishment commands on separate proxy processes can still race between the existing duplicate check and insert because the 2.3.0 database schema has no compatible uniqueness constraint. Adding one would be a data/schema migration and was intentionally not done here.
+- A multi-item `unwarn clear`/`unnote clear` can commit earlier deletes before a later database failure. Each individual delete is now truthful and cache-safe, but making the whole legacy operation atomic requires a new batch transaction API and failure-message contract.
 
-These are test-environment gaps rather than known command, permission, or data migrations. No incompatible change was introduced to work around them.
+These gaps and retained limitations require no command, permission, configuration, or data migration. No incompatible workaround was introduced.
 
 ## Primary compatibility references
 
