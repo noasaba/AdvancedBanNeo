@@ -18,7 +18,12 @@ public class DynamicDataSource {
             String properties = mi.getString(mi.getMySQLFile(), "MySQL.Properties", "verifyServerCertificate=false&useSSL=false&useUnicode=true&characterEncoding=utf8");
             int port = mi.getInteger(mi.getMySQLFile(), "MySQL.Port", 3306);
 
-            Class.forName("com.mysql.jdbc.Driver");
+            try {
+                Class.forName("com.mysql.cj.jdbc.Driver");
+            } catch (ClassNotFoundException ignored) {
+                // Connector/J 5.x and compatible server-provided legacy drivers.
+                Class.forName("com.mysql.jdbc.Driver");
+            }
             config.setJdbcUrl("jdbc:mysql://" + ip + ":" + port + "/" + dbName + "?"+properties);
             config.setUsername(usrName);
             config.setPassword(password);

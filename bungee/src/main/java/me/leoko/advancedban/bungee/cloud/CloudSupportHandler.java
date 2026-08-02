@@ -7,11 +7,15 @@ import net.md_5.bungee.api.ProxyServer;
 public class CloudSupportHandler {
 
     public static CloudSupport getCloudSystem(){
-        if (ProxyServer.getInstance().getPluginManager().getPlugin("CloudNet-Bridge") != null)  {
-            return new CloudNetV3Support();
-        }
-        if (ProxyServer.getInstance().getPluginManager().getPlugin("CloudNetAPI") != null) {
-            return new CloudNetV2Support();
+        try {
+            if (ProxyServer.getInstance().getPluginManager().getPlugin("CloudNet-Bridge") != null)  {
+                return new CloudNetV3Support();
+            }
+            if (ProxyServer.getInstance().getPluginManager().getPlugin("CloudNetAPI") != null) {
+                return new CloudNetV2Support();
+            }
+        } catch (IllegalStateException | LinkageError exception) {
+            ProxyServer.getInstance().getLogger().warning("AdvancedBan could not initialize its CloudNet compatibility adapter: " + exception.getMessage());
         }
         return null;
     }
