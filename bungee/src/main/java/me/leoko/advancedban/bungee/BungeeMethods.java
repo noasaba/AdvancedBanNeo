@@ -108,6 +108,8 @@ public class BungeeMethods implements MethodInterface {
     public String getFromUrlJson(String url, String key) {
         try {
             HttpURLConnection request = (HttpURLConnection) new URL(url).openConnection();
+            request.setConnectTimeout(Universal.HTTP_TIMEOUT_MILLIS);
+            request.setReadTimeout(Universal.HTTP_TIMEOUT_MILLIS);
             request.connect();
 
             JsonParser jp = new JsonParser();
@@ -277,7 +279,7 @@ public class BungeeMethods implements MethodInterface {
 
     @Override
     public String getIP(Object player) {
-        return ((ProxiedPlayer) player).getAddress().getHostName();
+        return ((ProxiedPlayer) player).getAddress().getAddress().getHostAddress();
     }
 
     @Override

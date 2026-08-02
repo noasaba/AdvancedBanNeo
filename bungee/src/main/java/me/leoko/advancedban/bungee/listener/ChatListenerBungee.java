@@ -8,6 +8,9 @@ import net.md_5.bungee.api.event.TabCompleteEvent;
 import net.md_5.bungee.api.plugin.Listener;
 import net.md_5.bungee.event.EventHandler;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Created by Leoko @ dev.skamps.eu on 24.07.2016.
  */
@@ -37,9 +40,16 @@ public class ChatListenerBungee implements Listener {
             if (command != null && event.getSender() instanceof ProxiedPlayer) {
                 if (command.getPermission() == null || Universal.get().getMethods().hasPerms(event.getSender(), command.getPermission())) {
                     final String[] args = event.getCursor().substring(commandName.length() + 1).split(" ", -1);
-                    event.getSuggestions().addAll(command.getTabCompleter().onTabComplete(event.getSender(), args));
+                    event.getSuggestions().addAll(getSuggestions(command, event.getSender(), args));
                 }
             }
         }
+    }
+
+    static List<String> getSuggestions(Command command, Object sender, String[] args) {
+        if (command.getTabCompleter() == null) {
+            return Collections.emptyList();
+        }
+        return command.getTabCompleter().onTabComplete(sender, args);
     }
 }

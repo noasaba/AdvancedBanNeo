@@ -5,6 +5,7 @@ import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.manager.MessageManager;
 import me.leoko.advancedban.manager.PunishmentManager;
+import me.leoko.advancedban.manager.TimeManager;
 import me.leoko.advancedban.manager.UUIDManager;
 import me.leoko.advancedban.utils.commands.ListProcessor;
 import me.leoko.advancedban.utils.commands.PunishmentProcessor;
@@ -28,7 +29,7 @@ import static me.leoko.advancedban.utils.tabcompletion.MutableTabCompleter.list;
 public enum Command {
     BAN(
             PunishmentType.BAN.getPerms(),
-            ".+",
+            Command::validatePunishmentArguments,
             new PunishmentTabCompleter(false),
             new PunishmentProcessor(PunishmentType.BAN),
             PunishmentType.BAN.getConfSection("Usage"),
@@ -36,7 +37,7 @@ public enum Command {
 
     TEMP_BAN(
             PunishmentType.TEMP_BAN.getPerms(),
-            "(-s )?\\S+ ?([1-9][0-9]*([wdhms]|mo)|#.+)( .*)?",
+            Command::validateTemporaryPunishmentArguments,
             new PunishmentTabCompleter(true),
             new PunishmentProcessor(PunishmentType.TEMP_BAN),
             PunishmentType.TEMP_BAN.getConfSection("Usage"),
@@ -44,7 +45,7 @@ public enum Command {
 
     IP_BAN(
             PunishmentType.IP_BAN.getPerms(),
-            ".+",
+            Command::validatePunishmentArguments,
             new PunishmentTabCompleter(false),
             new PunishmentProcessor(PunishmentType.IP_BAN),
             PunishmentType.IP_BAN.getConfSection("Usage"),
@@ -52,15 +53,15 @@ public enum Command {
 
     TEMP_IP_BAN(
             PunishmentType.TEMP_IP_BAN.getPerms(),
-            "(-s )?\\S+ ?([1-9][0-9]*([wdhms]|mo)|#.+)( .*)?",
+            Command::validateTemporaryPunishmentArguments,
             new PunishmentTabCompleter(true),
             new PunishmentProcessor(PunishmentType.TEMP_IP_BAN),
             PunishmentType.TEMP_IP_BAN.getConfSection("Usage"),
-            "tempipban"),
+            "tempipban", "tipban"),
 
     MUTE(
             PunishmentType.MUTE.getPerms(),
-            ".+",
+            Command::validatePunishmentArguments,
             new PunishmentTabCompleter(false),
             new PunishmentProcessor(PunishmentType.MUTE),
             PunishmentType.MUTE.getConfSection("Usage"),
@@ -68,7 +69,7 @@ public enum Command {
 
     TEMP_MUTE(
             PunishmentType.TEMP_MUTE.getPerms(),
-            "(-s )?\\S+ ?([1-9][0-9]*([wdhms]|mo)|#.+)( .*)?",
+            Command::validateTemporaryPunishmentArguments,
             new PunishmentTabCompleter(true),
             new PunishmentProcessor(PunishmentType.TEMP_MUTE),
             PunishmentType.TEMP_MUTE.getConfSection("Usage"),
@@ -76,7 +77,7 @@ public enum Command {
 
     WARN(
             PunishmentType.WARNING.getPerms(),
-            ".+",
+            Command::validatePunishmentArguments,
             new PunishmentTabCompleter(false),
             new PunishmentProcessor(PunishmentType.WARNING),
             PunishmentType.WARNING.getConfSection("Usage"),
@@ -84,7 +85,7 @@ public enum Command {
 
     TEMP_WARN(
             PunishmentType.TEMP_WARNING.getPerms(),
-            "(-s )?\\S+ ?([1-9][0-9]*([wdhms]|mo)|#.+)( .*)?",
+            Command::validateTemporaryPunishmentArguments,
             new PunishmentTabCompleter(true),
             new PunishmentProcessor(PunishmentType.TEMP_WARNING),
             PunishmentType.TEMP_WARNING.getConfSection("Usage"),
@@ -92,7 +93,7 @@ public enum Command {
 
     NOTE(
             PunishmentType.NOTE.getPerms(),
-            ".+",
+            Command::validatePunishmentArguments,
             new PunishmentTabCompleter(false),
             new PunishmentProcessor(PunishmentType.NOTE),
             PunishmentType.NOTE.getConfSection("Usage"),
@@ -100,7 +101,7 @@ public enum Command {
 
     KICK(
             PunishmentType.KICK.getPerms(),
-            ".+",
+            Command::validatePunishmentArguments,
             new PunishmentTabCompleter(false),
             input -> {
                 if (!Universal.get().getMethods().isOnline(input.getPrimaryData())) {
@@ -156,8 +157,14 @@ public enum Command {
                     }
 
                     String operator = Universal.get().getMethods().getName(input.getSender());
+                    int deleted = 0;
                     for (Punishment punishment : punishments) {
-                        punishment.delete(operator, true, true);
+                        if (punishment.deleteChecked(operator, true, true)) {
+                            deleted++;
+                        }
+                    }
+                    if (deleted != punishments.size()) {
+                        return;
                     }
                     MessageManager.sendMessage(input.getSender(), "Un" + confSection + ".Clear.Done",
                             true, "COUNT", String.valueOf(punishments.size()));
@@ -195,8 +202,14 @@ public enum Command {
                     }
 
                     String operator = Universal.get().getMethods().getName(input.getSender());
+                    int deleted = 0;
                     for (Punishment punishment : punishments) {
-                        punishment.delete(operator, true, true);
+                        if (punishment.deleteChecked(operator, true, true)) {
+                            deleted++;
+                        }
+                    }
+                    if (deleted != punishments.size()) {
+                        return;
                     }
                     MessageManager.sendMessage(input.getSender(), "Un" + confSection + ".Clear.Done",
                             true, "COUNT", String.valueOf(punishments.size()));
@@ -234,7 +247,13 @@ public enum Command {
                 Punishment punishment;
 
                 if (input.getPrimaryData().matches("[0-9]*")) {
-                    int id = Integer.parseInt(input.getPrimaryData());
+                    final int id;
+                    try {
+                        id = Integer.parseInt(input.getPrimaryData());
+                    } catch (NumberFormatException ignored) {
+                        MessageManager.sendMessage(input.getSender(), "ChangeReason.Usage", true);
+                        return;
+                    }
                     input.next();
 
                     punishment = PunishmentManager.get().getPunishment(id);
@@ -259,7 +278,9 @@ public enum Command {
                     return;
 
                 if (punishment != null) {
-                    punishment.updateReason(reason);
+                    if (!punishment.updateReasonChecked(reason)) {
+                        return;
+                    }
                     MessageManager.sendMessage(input.getSender(), "ChangeReason.Done",
                             true, "ID", String.valueOf(punishment.getId()));
                 } else {
@@ -298,7 +319,8 @@ public enum Command {
             "\\S+( [1-9][0-9]*)?|\\S+|",
             new CleanTabCompleter((user, args) -> {
                 if(args.length == 1)
-                    if(Universal.get().getMethods().hasPerms(user, "ab.notes.other"))
+                    if(Universal.get().hasPerms(user, "ab.warns.other")
+                            || Universal.get().hasPerms(user, "ab.notes.other"))
                         return list(CleanTabCompleter.PLAYER_PLACEHOLDER, "<Name>", "<Page>");
                     else
                         return list("<Page>");
@@ -528,6 +550,30 @@ public enum Command {
     private final Consumer<CommandInput> commandHandler;
     private final String usagePath;
     private final String[] names;
+
+    private static boolean validatePunishmentArguments(String[] args) {
+        int silentFlag = -1;
+        for (int i = 0; i < args.length && i < 4; i++) {
+            if ("-s".equalsIgnoreCase(args[i])) {
+                silentFlag = i;
+                break;
+            }
+        }
+        return args.length - (silentFlag == -1 ? 0 : 1) > 0;
+    }
+
+    private static boolean validateTemporaryPunishmentArguments(String[] args) {
+        int offset = args.length > 0 && "-s".equals(args[0]) ? 1 : 0;
+        if (args.length < offset + 2 || args[offset].isEmpty()) {
+            return false;
+        }
+
+        String duration = args[offset + 1];
+        if (duration.matches("#.+")) {
+            return true;
+        }
+        return duration.matches("[1-9][0-9]*(?:mo|[wdhms])") && TimeManager.toMilliSec(duration) > 0;
+    }
 
     Command(String permission, Predicate<String[]> syntaxValidator,
             TabCompleter tabCompleter, Consumer<CommandInput> commandHandler, String usagePath, String... names) {

@@ -90,9 +90,24 @@ public interface MethodInterface {
      * Register a command name to be handled by advancedban.
      *
      * @param cmd the cmd
+     * @param permission permission checked before executing the command
      * @param tabCompleter behaviour when tab completion is triggered
      */
-    void setCommandExecutor(String cmd, String permission, TabCompleter tabCompleter);
+    default void setCommandExecutor(String cmd, String permission, TabCompleter tabCompleter) {
+        setCommandExecutor(cmd, tabCompleter);
+    }
+
+    /**
+     * Legacy AdvancedBan 2.3.0 command registration contract.
+     *
+     * @param cmd the cmd
+     * @param tabCompleter behaviour when tab completion is triggered
+     * @deprecated implementations should override the permission-aware overload
+     */
+    @Deprecated
+    default void setCommandExecutor(String cmd, TabCompleter tabCompleter) {
+        setCommandExecutor(cmd, null, tabCompleter);
+    }
 
     /**
      * Send a message to a specific player.
@@ -157,7 +172,43 @@ public interface MethodInterface {
      * @param name the name of the user
      * @return the offline permission user
      */
-    Permissionable getOfflinePermissionPlayer(String name);
+    default Permissionable getOfflinePermissionPlayer(String name) {
+        requestOfflinePermissionPlayer(name);
+        return permission -> hasOfflinePerms(name, permission);
+    }
+
+    /**
+     * Legacy AdvancedBan 2.3.0 hook for loading offline permission data.
+     *
+     * @param name the player's name
+     * @deprecated use {@link #getOfflinePermissionPlayer(String)}
+     */
+    @Deprecated
+    default void requestOfflinePermissionPlayer(String name) {
+    }
+
+    /**
+     * Legacy AdvancedBan 2.3.0 hook for releasing offline permission data.
+     *
+     * @param name the player's name
+     * @deprecated use {@link #getOfflinePermissionPlayer(String)}
+     */
+    @Deprecated
+    default void releaseOfflinePermissionPlayer(String name) {
+    }
+
+    /**
+     * Legacy AdvancedBan 2.3.0 offline permission query.
+     *
+     * @param name the player's name
+     * @param perms the permission node
+     * @return whether the player has the permission
+     * @deprecated use {@link #getOfflinePermissionPlayer(String)}
+     */
+    @Deprecated
+    default boolean hasOfflinePerms(String name, String perms) {
+        return getOfflinePermissionPlayer(name).hasPermission(perms);
+    }
 
     /**
      * Check whether player is online.
