@@ -7,8 +7,6 @@ import me.leoko.advancedban.manager.MessageManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.TimeManager;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.Collections;
 import java.util.Date;
@@ -26,8 +24,14 @@ public class Punishment {
 
     private String reason;
     private int id;
+    private boolean silent;
 
     public Punishment(String name, String uuid, String reason, String operator, PunishmentType type, long start, long end, String calculation, int id) {
+        this(name, uuid, reason, operator, type, start, end, calculation, id, false);
+    }
+
+    public Punishment(String name, String uuid, String reason, String operator, PunishmentType type, long start,
+                      long end, String calculation, int id, boolean silent) {
         this.name = name;
         this.uuid = uuid;
         this.reason = reason;
@@ -37,13 +41,18 @@ public class Punishment {
         this.end = end;
         this.calculation = calculation;
         this.id = id;
+        this.silent = silent;
     }
 
     public static void create(String name, String target, String reason, String operator, PunishmentType type, Long end,
                               String calculation, boolean silent) {
-        new Punishment(name, target, reason, operator, end == -1 ? type.getPermanent() : type,
-                TimeManager.getTime(), end, calculation, -1)
-                .create(silent);
+        createChecked(name, target, reason, operator, type, end, calculation, silent);
+    }
+
+    public static boolean createChecked(String name, String target, String reason, String operator, PunishmentType type,
+                                        Long end, String calculation, boolean silent) {
+        return new Punishment(name, target, reason, operator, end == -1 ? type.getPermanent() : type,
+                TimeManager.getTime(), end, calculation, -1).createChecked(silent);
     }
 
     public String getReason() {
@@ -64,37 +73,35 @@ public class Punishment {
     }
 
     public void create(boolean silent) {
+        createChecked(silent);
+    }
+
+    public boolean createChecked(boolean silent) {
         if (id != -1) {
             Universal.get().log("!! Failed! AB tried to overwrite the punishment:");
             Universal.get().log("!! Failed at: " + toString());
-            return;
+            return false;
         }
 
         if (uuid == null) {
             Universal.get().log("!! Failed! AB has not saved the " + getType().getName() + " because there is no fetched UUID");
             Universal.get().log("!! Failed at: " + toString());
-            return;
+            return false;
         }
+
+        this.silent = silent;
 
         final int cWarnings = getType().getBasic() == PunishmentType.WARNING ? (PunishmentManager.get().getCurrentWarns(getUuid()) + 1) : 0;
 
-        DatabaseManager.get().executeStatement(SQLQuery.INSERT_PUNISHMENT_HISTORY, getName(), getUuid(), getReason(), getOperator(), getType().name(), getStart(), getEnd(), getCalculation());
-
-        if (getType() != PunishmentType.KICK) {
-            try {
-                DatabaseManager.get().executeStatement(SQLQuery.INSERT_PUNISHMENT, getName(), getUuid(), getReason(), getOperator(), getType().name(), getStart(), getEnd(), getCalculation());
-                try (ResultSet rs = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_EXACT_PUNISHMENT, getUuid(), getStart(), getType().name())) {
-                    if (rs.next()) {
-                        id = rs.getInt("id");
-                    } else {
-                        Universal.get().log("!! Not able to update ID of punishment! Please restart the server to resolve this issue!");
-                        Universal.get().log("!! Failed at: " + toString());
-                    }
-                }
-            } catch (SQLException ex) {
-                Universal.get().debugSqlException(ex);
-            }
+        Integer persistedId = DatabaseManager.get().createPunishment(getType() == PunishmentType.KICK,
+                getName(), getUuid(), getReason(), getOperator(), getType().name(),
+                getStart(), getEnd(), getCalculation());
+        if (persistedId == null) {
+            Universal.get().log("!! Failed to save punishment; no notification or action was emitted.");
+            Universal.get().log("!! Failed at: " + toString());
+            return false;
         }
+        id = persistedId;
 
         if (!silent) {
             announce(cWarnings);
@@ -126,21 +133,26 @@ public class Punishment {
                 }
             }
             if (cmd != null) {
-                final String finalCmd = cmd.replaceAll("%PLAYER%", getName()).replaceAll("%COUNT%", cWarnings + "").replaceAll("%REASON%", getReason());
+                final String finalCmd = cmd.replace("%PLAYER%", getName()).replace("%COUNT%", cWarnings + "").replace("%REASON%", getReason());
                 mi.runSync(() -> {
                     mi.executeCommand(finalCmd);
                     Universal.get().log("Executing command: " + finalCmd);
                 });
             }
         }
+        return true;
     }
 
     public void updateReason(String reason) {
-        this.reason = reason;
+        updateReasonChecked(reason);
+    }
 
-        if (id != -1) {
-            DatabaseManager.get().executeStatement(SQLQuery.UPDATE_PUNISHMENT_REASON, reason, id);
+    public boolean updateReasonChecked(String reason) {
+        if (id == -1 || !DatabaseManager.get().executeStatementChecked(SQLQuery.UPDATE_PUNISHMENT_REASON, reason, id)) {
+            return false;
         }
+        this.reason = reason;
+        return true;
     }
 
     private void announce(int cWarnings) {
@@ -164,18 +176,25 @@ public class Punishment {
     }
 
     public void delete(String who, boolean massClear, boolean removeCache) {
+        deleteChecked(who, massClear, removeCache);
+    }
+
+    public boolean deleteChecked(String who, boolean massClear, boolean removeCache) {
         if (getType() == PunishmentType.KICK) {
             Universal.get().log("!! Failed deleting! You are not able to delete Kicks!");
-            return;
+            return false;
         }
 
         if (id == -1) {
             Universal.get().log("!! Failed deleting! The Punishment is not created yet!");
             Universal.get().log("!! Failed at: " + toString());
-            return;
+            return false;
         }
 
-        DatabaseManager.get().executeStatement(SQLQuery.DELETE_PUNISHMENT, getId());
+        if (!DatabaseManager.get().executeStatementChecked(SQLQuery.DELETE_PUNISHMENT, getId())) {
+            Universal.get().log("!! Failed deleting punishment from the database; cache and events were left unchanged.");
+            return false;
+        }
 
         if (removeCache) {
             PunishmentManager.get().getLoadedPunishments(false).remove(this);
@@ -191,6 +210,7 @@ public class Punishment {
 
         Universal.get().debug("Deleted punishment " + getId() + " from " + getName() + " punishment reason: " + getReason());
         mi.callRevokePunishmentEvent(this, massClear);
+        return true;
     }
 
     public List<String> getLayout() {
@@ -268,6 +288,10 @@ public class Punishment {
 
     public String getOperator() {
         return this.operator;
+    }
+
+    public boolean isSilent() {
+        return silent;
     }
 
     public String getCalculation() {

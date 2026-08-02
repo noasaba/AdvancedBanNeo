@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 
 /**
  * The Database Manager is used to interact directly with the database is use.<br>
@@ -63,10 +64,14 @@ public class DatabaseManager {
      * Shuts down the HSQLDB if used.
      */
     public void shutdown() {
+        if (dataSource == null) {
+            return;
+        }
+
         if (!useMySQL) {
             try(Connection connection = dataSource.getConnection(); final PreparedStatement statement = connection.prepareStatement("SHUTDOWN")){
                 statement.execute();
-            }catch (SQLException | NullPointerException exc){
+            }catch (SQLException exc){
                 Universal.get().log("An unexpected error has occurred turning off the database");
                 Universal.get().debugException(exc);
             }
@@ -93,6 +98,25 @@ public class DatabaseManager {
     }
 
     /**
+     * Executes an update and reports whether it reached the database.
+     * The legacy void method remains available for API compatibility.
+     */
+    public synchronized boolean executeStatementChecked(SQLQuery sql, Object... parameters) {
+        if (dataSource == null) {
+            return false;
+        }
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            setParameters(statement, parameters);
+            return statement.executeUpdate() > 0;
+        } catch (SQLException | RuntimeException exception) {
+            Universal.get().log("An unexpected error has occurred updating the database");
+            Universal.get().debugException(exception);
+            return false;
+        }
+    }
+
+    /**
      * Execute a sql statement.
      *
      * @param sql        the sql statement
@@ -101,6 +125,70 @@ public class DatabaseManager {
      */
     public ResultSet executeResultStatement(SQLQuery sql, Object... parameters) {
         return executeStatement(sql, true, parameters);
+    }
+
+    /**
+     * Persists a punishment and its history entry in one transaction.
+     *
+     * @return the active punishment id, {@code -1} for a successfully stored
+     *         kick, or {@code null} when nothing was committed
+     */
+    public synchronized Integer createPunishment(boolean kick, Object... parameters) {
+        if (dataSource == null) {
+            return null;
+        }
+
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                try (PreparedStatement history = connection.prepareStatement(SQLQuery.INSERT_PUNISHMENT_HISTORY.toString())) {
+                    setParameters(history, parameters);
+                    history.executeUpdate();
+                }
+
+                int punishmentId = -1;
+                if (!kick) {
+                    try (PreparedStatement current = connection.prepareStatement(
+                            SQLQuery.INSERT_PUNISHMENT.toString(), Statement.RETURN_GENERATED_KEYS)) {
+                        setParameters(current, parameters);
+                        current.executeUpdate();
+                        try (ResultSet keys = current.getGeneratedKeys()) {
+                            if (keys.next()) {
+                                punishmentId = keys.getInt(1);
+                            }
+                        }
+                    }
+
+                    if (punishmentId == -1) {
+                        try (PreparedStatement select = connection.prepareStatement(SQLQuery.SELECT_EXACT_PUNISHMENT.toString())) {
+                            select.setObject(1, parameters[1]);
+                            select.setObject(2, parameters[5]);
+                            select.setObject(3, parameters[4]);
+                            try (ResultSet result = select.executeQuery()) {
+                                if (!result.next()) {
+                                    throw new SQLException("Inserted punishment could not be read back");
+                                }
+                                punishmentId = result.getInt("id");
+                            }
+                        }
+                    }
+                }
+
+                connection.commit();
+                return punishmentId;
+            } catch (SQLException | RuntimeException exception) {
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackException) {
+                    exception.addSuppressed(rollbackException);
+                }
+                throw exception;
+            }
+        } catch (SQLException | RuntimeException exception) {
+            Universal.get().log("An unexpected error has occurred saving a punishment in the database");
+            Universal.get().debugException(exception);
+            return null;
+        }
     }
 
     private ResultSet executeStatement(SQLQuery sql, boolean result, Object... parameters) {
@@ -140,13 +228,19 @@ public class DatabaseManager {
         return null;
     }
 
+    private static void setParameters(PreparedStatement statement, Object... parameters) throws SQLException {
+        for (int i = 0; i < parameters.length; i++) {
+            statement.setObject(i + 1, parameters[i]);
+        }
+    }
+
     /**
      * Check whether there is a valid connection to the database.
      *
      * @return whether there is a valid connection
      */
     public boolean isConnectionValid() {
-        return dataSource.isRunning();
+        return dataSource != null && dataSource.isRunning();
     }
 
     /**

@@ -12,15 +12,16 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.URL;
+import java.net.URLConnection;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 /**
@@ -28,13 +29,15 @@ import java.util.Scanner;
  */
 public class Universal {
 
+    public static final int HTTP_TIMEOUT_MILLIS = 5_000;
+
     private static Universal instance = null;
 
     public static void setRedis(boolean redis) {
         Universal.redis = redis;
     }
 
-    private final Map<String, String> ips = new HashMap<>();
+    private final Map<String, String> ips = new ConcurrentHashMap<>();
     private MethodInterface mi;
     private LogManager logManager;
 
@@ -175,11 +178,13 @@ public class Universal {
     public String getFromURL(String surl) {
         String response = null;
         try {
-            URL url = new URL(surl);
-            Scanner s = new Scanner(url.openStream());
-            if (s.hasNext()) {
-                response = s.next();
-                s.close();
+            URLConnection connection = new URL(surl).openConnection();
+            connection.setConnectTimeout(HTTP_TIMEOUT_MILLIS);
+            connection.setReadTimeout(HTTP_TIMEOUT_MILLIS);
+            try (Scanner scanner = new Scanner(connection.getInputStream())) {
+                if (scanner.hasNext()) {
+                    response = scanner.next();
+                }
             }
         } catch (IOException exc) {
             debug("!! Failed to connect to URL: " + surl);

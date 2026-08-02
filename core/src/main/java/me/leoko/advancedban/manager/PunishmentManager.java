@@ -9,6 +9,7 @@ import me.leoko.advancedban.utils.SQLQuery;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The Punishment Manager handles the punishments. It loads and parses them from the database, caches them
@@ -17,9 +18,9 @@ import java.util.*;
 public class PunishmentManager {
 
     private static PunishmentManager instance = null;
-    private final Set<Punishment> punishments = Collections.synchronizedSet(new HashSet<>());
-    private final Set<Punishment> history = Collections.synchronizedSet(new HashSet<>());
-    private final Set<String> cached = Collections.synchronizedSet(new HashSet<>());
+    private final Set<Punishment> punishments = ConcurrentHashMap.newKeySet();
+    private final Set<Punishment> history = ConcurrentHashMap.newKeySet();
+    private final Set<String> cached = ConcurrentHashMap.newKeySet();
     
     private Universal universal() {
     	return Universal.get();
@@ -90,8 +91,12 @@ public class PunishmentManager {
         String ip = Universal.get().getIps().get(name);
         String uuid = UUIDManager.get().getUUID(name);
         cached.remove(name);
-        cached.remove(uuid);
-        cached.remove(ip);
+        if (uuid != null) {
+            cached.remove(uuid);
+        }
+        if (ip != null) {
+            cached.remove(ip);
+        }
 
         Iterator<Punishment> iterator = punishments.iterator();
         while (iterator.hasNext()) {
@@ -136,6 +141,9 @@ public class PunishmentManager {
             }
         } else {
             try (ResultSet rs = DatabaseManager.get().executeResultStatement(current ? SQLQuery.SELECT_USER_PUNISHMENTS : SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY, target)) {
+                if (rs == null) {
+                    return ptList;
+                }
                 while (rs.next()) {
                     Punishment punishment = getPunishmentFromResultSet(rs);
                     if ((put == null || put == punishment.getType().getBasic()) && (!current || !punishment.isExpired())) {
@@ -163,6 +171,9 @@ public class PunishmentManager {
         List<Punishment> ptList = new ArrayList<>();
 
         ResultSet rs = DatabaseManager.get().executeResultStatement(sqlQuery, parameters);
+        if (rs == null) {
+            return ptList;
+        }
         try {
             while (rs.next()) {
                 Punishment punishment = getPunishmentFromResultSet(rs);
@@ -193,6 +204,9 @@ public class PunishmentManager {
 
 
         try (ResultSet rs = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_PUNISHMENT_BY_ID, id)) {
+            if (rs == null) {
+                return null;
+            }
             if (rs.next()) {
                 final Punishment punishment = getPunishmentFromResultSet(rs);
                 if (!punishment.isExpired())
@@ -316,8 +330,12 @@ public class PunishmentManager {
      */
     public void setCached(InterimData data) {
         cached.add(data.getName());
-        cached.add(data.getIp());
-        cached.add(data.getUuid());
+        if (data.getIp() != null) {
+            cached.add(data.getIp());
+        }
+        if (data.getUuid() != null) {
+            cached.add(data.getUuid());
+        }
     }
 
     /**
@@ -335,7 +353,9 @@ public class PunishmentManager {
 
         int i = 0;
         try (ResultSet resultSet = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY_BY_CALCULATION, uuid, layout)) {
-
+            if (resultSet == null) {
+                return 0;
+            }
             while (resultSet.next()) {
                 i++;
             }

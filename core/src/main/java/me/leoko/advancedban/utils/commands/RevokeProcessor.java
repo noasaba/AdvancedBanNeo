@@ -37,7 +37,9 @@ public class RevokeProcessor implements Consumer<Command.CommandInput> {
         }
 
         final String operator = Universal.get().getMethods().getName(input.getSender());
-        punishment.delete(operator, false, true);
+        if (!punishment.deleteChecked(operator, false, true)) {
+            return;
+        }
         MessageManager.sendMessage(input.getSender(), "Un" + type.getName() + ".Done",
                 true, "NAME", name);
     }

@@ -18,13 +18,14 @@ public class InternalListener implements Listener {
     
     @EventHandler
     public void onPunish(PunishmentEvent e) {
+        Date expiration = getExpiration(e.getPunishment().getType(), e.getPunishment().getEnd());
         BanList banlist;
         if (e.getPunishment().getType().equals(PunishmentType.BAN) || e.getPunishment().getType().equals(PunishmentType.TEMP_BAN)) {
             banlist = Bukkit.getBanList(BanList.Type.NAME);
-            banlist.addBan(e.getPunishment().getName(), e.getPunishment().getReason(), new Date(e.getPunishment().getEnd()), e.getPunishment().getOperator());
+            banlist.addBan(e.getPunishment().getName(), e.getPunishment().getReason(), expiration, e.getPunishment().getOperator());
         } else if (e.getPunishment().getType().equals(PunishmentType.IP_BAN) || e.getPunishment().getType().equals(PunishmentType.TEMP_IP_BAN)) {
             banlist = Bukkit.getBanList(BanList.Type.IP);
-            banlist.addBan(e.getPunishment().getName(), e.getPunishment().getReason(), new Date(e.getPunishment().getEnd()), e.getPunishment().getOperator());
+            banlist.addBan(getBanTarget(e.getPunishment().getType(), e.getPunishment().getName(), e.getPunishment().getUuid()), e.getPunishment().getReason(), expiration, e.getPunishment().getOperator());
         }
     }
     
@@ -36,7 +37,15 @@ public class InternalListener implements Listener {
             banlist.pardon(e.getPunishment().getName());
         } else if (e.getPunishment().getType().equals(PunishmentType.IP_BAN) || e.getPunishment().getType().equals(PunishmentType.TEMP_IP_BAN)) {
             banlist = Bukkit.getBanList(BanList.Type.IP);
-            banlist.pardon(e.getPunishment().getName());
+            banlist.pardon(getBanTarget(e.getPunishment().getType(), e.getPunishment().getName(), e.getPunishment().getUuid()));
         }
+    }
+
+    static Date getExpiration(PunishmentType type, long end) {
+        return type.isTemp() ? new Date(end) : null;
+    }
+
+    static String getBanTarget(PunishmentType type, String name, String uuid) {
+        return type.isIpOrientated() ? uuid : name;
     }
 }
