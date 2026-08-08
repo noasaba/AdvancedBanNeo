@@ -31,7 +31,8 @@ public class CommandReceiverBungee extends Command {
     @Override
 	public void execute(final CommandSender sender, final String[] args) {
     	if (args.length > 0) {
-    		args[0] = (BungeeMain.get().getProxy().getPlayer(args[0]) != null ? BungeeMain.get().getProxy().getPlayer(args[0]).getName() : args[0]);
+			net.md_5.bungee.api.connection.ProxiedPlayer target = BungeeMain.get().getProxy().getPlayer(args[0]);
+			args[0] = target == null ? args[0] : target.getName();
     	}
         CommandManager.get().onCommand(sender, this.getName(), args);
     }

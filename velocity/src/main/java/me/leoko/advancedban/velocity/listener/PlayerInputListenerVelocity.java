@@ -10,6 +10,9 @@ import me.leoko.advancedban.Universal;
 public final class PlayerInputListenerVelocity {
     @Subscribe(priority = 100)
     public EventTask onChat(PlayerChatEvent event) {
+        if (!event.getResult().isAllowed()) {
+            return null;
+        }
         return EventTask.async(() -> {
             if (Universal.get().getMethods().callChat(event.getPlayer())) {
                 event.setResult(PlayerChatEvent.ChatResult.denied());
@@ -19,7 +22,7 @@ public final class PlayerInputListenerVelocity {
 
     @Subscribe(priority = 100)
     public EventTask onCommand(CommandExecuteEvent event) {
-        if (!(event.getCommandSource() instanceof Player)) {
+        if (!(event.getCommandSource() instanceof Player) || !event.getResult().isAllowed()) {
             return null;
         }
         return EventTask.async(() -> {

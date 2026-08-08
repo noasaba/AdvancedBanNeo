@@ -41,11 +41,8 @@ public final class VelocityMethods implements MethodInterface {
     private final VelocityMain plugin;
     private final ProxyServer proxy;
     private final Path dataDirectory;
-    private YamlConfig config;
-    private YamlConfig messages;
-    private YamlConfig layouts;
-    private YamlConfig mysql;
-    private boolean luckPermsAvailable;
+    private volatile ConfigSnapshot files;
+    private volatile boolean luckPermsAvailable;
 
     VelocityMethods(VelocityMain plugin, ProxyServer proxy, Path dataDirectory) {
         this.plugin = plugin;
@@ -61,10 +58,11 @@ public final class VelocityMethods implements MethodInterface {
             Path messageFile = copyDefault("Messages.yml");
             Path layoutFile = copyDefault("Layouts.yml");
             Path mysqlFile = dataDirectory.resolve("MySQL.yml");
-            config = YamlConfig.load(configFile);
-            messages = YamlConfig.load(messageFile);
-            layouts = YamlConfig.load(layoutFile);
-            mysql = Files.exists(mysqlFile) ? YamlConfig.load(mysqlFile) : config;
+            YamlConfig loadedConfig = YamlConfig.load(configFile);
+            YamlConfig loadedMessages = YamlConfig.load(messageFile);
+            YamlConfig loadedLayouts = YamlConfig.load(layoutFile);
+            YamlConfig loadedMysql = Files.exists(mysqlFile) ? YamlConfig.load(mysqlFile) : loadedConfig;
+            files = new ConfigSnapshot(loadedConfig, loadedMessages, loadedLayouts, loadedMysql);
             luckPermsAvailable = proxy.getPluginManager().isLoaded("luckperms");
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to load AdvancedBan configuration", exception);
@@ -123,17 +121,17 @@ public final class VelocityMethods implements MethodInterface {
 
     @Override
     public Object getConfig() {
-        return config;
+        return files.config;
     }
 
     @Override
     public Object getMessages() {
-        return messages;
+        return files.messages;
     }
 
     @Override
     public Object getLayouts() {
-        return layouts;
+        return files.layouts;
     }
 
     @Override
@@ -185,11 +183,8 @@ public final class VelocityMethods implements MethodInterface {
 
     @Override
     public String getName(String uuid) {
-        try {
-            return proxy.getPlayer(UUID.fromString(uuid)).map(Player::getUsername).orElse(null);
-        } catch (IllegalArgumentException ignored) {
-            return null;
-        }
+        UUID parsed = UUIDManager.get().fromString(uuid);
+        return parsed == null ? null : proxy.getPlayer(parsed).map(Player::getUsername).orElse(null);
     }
 
     @Override
@@ -230,8 +225,9 @@ public final class VelocityMethods implements MethodInterface {
             return permission -> user != null
                     && user.getCachedData().getPermissionData().checkPermission(permission).asBoolean();
         } catch (RuntimeException exception) {
+            Universal.get().log("LuckPerms offline lookup failed; refusing to punish the target.");
             Universal.get().debugException(exception);
-            return permission -> false;
+            return permission -> true;
         }
     }
 
@@ -299,6 +295,9 @@ public final class VelocityMethods implements MethodInterface {
 
     @Override
     public boolean callCMD(Object player, String cmd) {
+        if (cmd == null || cmd.length() < 2) {
+            return false;
+        }
         Punishment punishment;
         if (Universal.get().isMuteCommand(cmd.substring(1))
                 && (punishment = PunishmentManager.get().getMute(UUIDManager.get().getUUID(getName(player)))) != null) {
@@ -310,7 +309,7 @@ public final class VelocityMethods implements MethodInterface {
 
     @Override
     public Object getMySQLFile() {
-        return mysql;
+        return files.mysql;
     }
 
     @Override
@@ -431,5 +430,19 @@ public final class VelocityMethods implements MethodInterface {
             throw new IllegalArgumentException("Not an AdvancedBan Velocity configuration");
         }
         return (YamlConfig) value;
+    }
+
+    private static final class ConfigSnapshot {
+        private final YamlConfig config;
+        private final YamlConfig messages;
+        private final YamlConfig layouts;
+        private final YamlConfig mysql;
+
+        private ConfigSnapshot(YamlConfig config, YamlConfig messages, YamlConfig layouts, YamlConfig mysql) {
+            this.config = config;
+            this.messages = messages;
+            this.layouts = layouts;
+            this.mysql = mysql;
+        }
     }
 }

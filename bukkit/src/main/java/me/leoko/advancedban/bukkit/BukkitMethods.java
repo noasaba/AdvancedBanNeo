@@ -264,7 +264,8 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public String getName(String uuid) {
-        return callSync(() -> Bukkit.getOfflinePlayer(UUID.fromString(uuid)).getName());
+        UUID parsed = UUIDManager.get().fromString(uuid);
+        return parsed == null ? null : callSync(() -> Bukkit.getOfflinePlayer(parsed).getName());
     }
 
     @Override
@@ -296,6 +297,9 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public boolean callCMD(Object player, String cmd) {
+        if (cmd == null || cmd.length() < 2) {
+            return false;
+        }
         Punishment pnt;
         if (Universal.get().isMuteCommand(cmd.substring(1)) && (pnt = PunishmentManager.get().getMute(UUIDManager.get().getUUID(getName(player)))) != null) {
             pnt.getLayout().forEach(str -> sendMessage(player, str));

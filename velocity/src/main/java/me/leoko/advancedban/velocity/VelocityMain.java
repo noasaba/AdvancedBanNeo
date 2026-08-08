@@ -9,6 +9,7 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
 import me.leoko.advancedban.Universal;
+import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.velocity.listener.ConnectionListenerVelocity;
 import me.leoko.advancedban.velocity.listener.PlayerInputListenerVelocity;
 
@@ -36,10 +37,17 @@ public final class VelocityMain {
 
     @Subscribe
     public void onInitialize(ProxyInitializeEvent event) {
-        Universal.get().setup(new VelocityMethods(this, proxy, dataDirectory));
-        proxy.getEventManager().register(this, new ConnectionListenerVelocity());
-        proxy.getEventManager().register(this, new PlayerInputListenerVelocity());
-        initialized = true;
+        try {
+            Universal.get().setup(new VelocityMethods(this, proxy, dataDirectory));
+            proxy.getEventManager().register(this, new ConnectionListenerVelocity());
+            proxy.getEventManager().register(this, new PlayerInputListenerVelocity());
+            initialized = true;
+        } catch (RuntimeException | Error exception) {
+            if (DatabaseManager.get().isConnectionValid()) {
+                DatabaseManager.get().shutdown();
+            }
+            throw exception;
+        }
     }
 
     @Subscribe

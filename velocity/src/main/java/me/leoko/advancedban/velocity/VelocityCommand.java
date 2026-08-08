@@ -21,11 +21,10 @@ final class VelocityCommand implements SimpleCommand {
 
     @Override
     public void execute(Invocation invocation) {
-        String[] args = invocation.arguments();
+        String[] args = invocation.arguments().clone();
         if (args.length > 0) {
-            args[0] = Universal.get().getMethods().getPlayer(args[0]) != null
-                    ? Universal.get().getMethods().getName(Universal.get().getMethods().getPlayer(args[0]))
-                    : args[0];
+            Object target = Universal.get().getMethods().getPlayer(args[0]);
+            args[0] = target == null ? args[0] : Universal.get().getMethods().getName(target);
         }
         CommandManager.get().onCommand(invocation.source(), name, args);
     }

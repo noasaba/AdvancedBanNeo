@@ -21,7 +21,7 @@ The public `MethodInterface` methods from 2.3.0 remain callable. The legacy Bung
 | Velocity | 4.1.0-SNAPSHOT build 14 | Native optional adapter loaded; HSQLDB, commands, aliases, plugin listing, and clean shutdown passed |
 | MySQL | 8.4.10 | Tables, punishment creation, direct SQL inspection, restart, and persisted lookup passed |
 
-Minecraft 26.2 and current Paper require Java 25. Core, Bukkit, BungeeCord, and every class in the legacy combined bundle remain Java 8 bytecode (`major version 52`) for compatibility with older deployments. The optional self-contained Velocity artifact is separate and compiled for Java 25 (`major version 69`).
+Minecraft 26.2 and current Paper require Java 25. Core, Bukkit, BungeeCord, and the legacy bundle's project/runtime classes remain Java 8 bytecode (`major version 52`) for compatibility with older deployments. The optional self-contained Velocity artifact is separate and compiled for Java 25 (`major version 69`).
 
 ## Command compatibility
 
@@ -53,15 +53,23 @@ The historical `ab.notes.other` typo continues to authorize the `/warns` complet
 - Replaced lossy BungeeCord punishment payload text with JSON while continuing to accept the old payload; nullable reasons, absolute expiry, and silent state round-trip.
 - Corrected Bukkit IP BanList targets and permanent expiry handling.
 - Removed unavailable CloudNet build dependencies while retaining CloudNet v2/v3 and CloudPerms discovery through optional reflective adapters.
+- Serialized duplicate BAN/MUTE creation in one JVM and, on MySQL, across upgraded proxy processes with a schema-free advisory lock.
+- Made multi-item `unwarn clear` and `unnote clear` database changes atomic.
+- Made expiry cleanup retry-safe, periodic for loaded entries, and consistent for cached ID lookups.
+- Removed all cached copies by database ID and isolated post-commit platform/listener failures from persisted state.
+- Added immediate RedisBungee cache invalidation and an optional shared-MySQL refresh mode for Bungee/Velocity networks.
+- Serialized database-backed cache refreshes with local cache updates so an older Redis/MySQL snapshot cannot overwrite a newer punishment state.
 
 ## Automated verification
 
-The Java 25 clean reactor build contains six modules and passes 38 tests:
+The normal Java 25 reactor suite passes 43 tests, plus two environment-gated MySQL 8.4 integration tests:
 
-- Core: 28
+- Core: 33
 - Bukkit/Paper: 3
 - BungeeCord: 5
 - Velocity: 2
+
+The MySQL tests use two independent pools to verify advisory-lock serialization and verify rollback when one row in a batch delete is missing.
 
 The generated legacy bundle contains the Bukkit and Bungee descriptors, both database drivers, and only Java 8-compatible classes. The separate self-contained Velocity artifact contains `velocity-plugin.json` and the same storage implementation. CI builds with Java 25, runs `clean verify`, and publishes both artifacts using current GitHub Actions versions. The release workflow's separate Javadoc phase is also reproducible from reactor-installed artifacts.
 
@@ -73,7 +81,13 @@ Velocity support is optional. Install the artifact for the platform responsible 
 - BungeeCord network: install `AdvancedBan-Bundle` on BungeeCord.
 - Velocity network: install `AdvancedBan-Velocity` on Velocity.
 
-For multiple proxy instances, point each instance at the same MySQL database. This provides the same database-backed punishment state used by BungeeCord deployments. The new adapter does not require BungeeCord and does not automatically bridge a simultaneously running BungeeCord and Velocity process.
+For multiple proxy instances, point each instance at the same MySQL database. RedisBungee-enabled Bungee instances invalidate one another immediately. For multi-Velocity networks, or a Bungee/Velocity transition where both proxy types are live, add the following optional key to each proxy's existing `config.yml`:
+
+```yaml
+MySQLCacheSyncInterval: 1
+```
+
+The value is the refresh interval in seconds. It is disabled when absent or `0`, so every unmodified AdvancedBan 2.3.0 configuration retains its previous behavior. When enabled, only online-player caches are refreshed; storage files, tables, commands, and permissions are unchanged. The native Velocity adapter remains a separate optional artifact and never requires BungeeCord.
 
 ## Remaining integration coverage
 
@@ -81,13 +95,12 @@ The following combinations were not available for full end-to-end automation and
 
 - A real Minecraft 26.2 client login/chat session. The available Mineflayer release rejected protocol `26.2` before connecting; proxy and backend startup were verified independently.
 - Live LuckPerms offline-user resolution on Velocity and a LuckPerms-only `ab.*` test server.
-- RedisBungee/Velocity, CloudNet v2/v3, and multiple live proxy instances sharing MySQL.
+- A live RedisBungee/Velocity mixed network and CloudNet v2/v3. Shared-MySQL locking and rollback are covered with MySQL 8.4 integration tests, but multi-process player E2E remains manual.
 - Velocity-to-Bukkit plugin-message bridging. Velocity instead provides native proxy enforcement and database-backed synchronization.
 - Third-party plugin binary tests beyond reflection checks of the 2.3.0 public compatibility surface.
 - The historical Bungee-to-Bukkit `advancedban:main` sender has no authenticated Bukkit receiver in 2.3.0. Enabling a receiver without a shared secret would let client plugin messages attempt native BanList changes, so this PR does not claim plugin messaging as a secure synchronization transport. Proxy enforcement plus shared MySQL is the supported network model.
 - BungeeCord and Velocity currently publish the required development APIs as snapshot coordinates. Pinning a timestamped snapshot would eventually become unavailable under upstream retention, so the POM follows the named upstream snapshot; organizations requiring hermetic builds should mirror the resolved artifacts internally.
-- Concurrent punishment commands on separate proxy processes can still race between the existing duplicate check and insert because the 2.3.0 database schema has no compatible uniqueness constraint. Adding one would be a data/schema migration and was intentionally not done here.
-- A multi-item `unwarn clear`/`unnote clear` can commit earlier deletes before a later database failure. Each individual delete is now truthful and cache-safe, but making the whole legacy operation atomic requires a new batch transaction API and failure-message contract.
+- Direct third-party calls to the legacy public `Punishment.create(...)` API intentionally retain 2.3.0 semantics and do not perform the command layer's duplicate check. Built-in commands use the new local/MySQL lock.
 
 These gaps and retained limitations require no command, permission, configuration, or data migration. No incompatible workaround was introduced.
 
