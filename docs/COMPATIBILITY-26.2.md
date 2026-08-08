@@ -77,9 +77,9 @@ The generated legacy bundle contains the Bukkit and Bungee descriptors, both dat
 
 Velocity support is optional. Install the artifact for the platform responsible for network-wide punishments:
 
-- Bukkit/Paper-only network: install `AdvancedBan-Bundle` on the server.
-- BungeeCord network: install `AdvancedBan-Bundle` on BungeeCord.
-- Velocity network: install `AdvancedBan-Velocity` on Velocity.
+- Bukkit/Paper-only network: install `AdvancedBan-Neo` on the server.
+- BungeeCord network: install `AdvancedBan-Neo` on BungeeCord.
+- Velocity network: install `AdvancedBan-Neo-Velocity` on Velocity.
 
 For multiple proxy instances, point each instance at the same MySQL database. RedisBungee-enabled Bungee instances invalidate one another immediately. For multi-Velocity networks, or a Bungee/Velocity transition where both proxy types are live, add the following optional key to each proxy's existing `config.yml`:
 

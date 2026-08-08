@@ -8,6 +8,7 @@
     <artifactId>AdvancedBan</artifactId>
     <version>2.3.0</version>
     <packaging>pom</packaging>
+    <name>AdvancedBan Neo</name>
 
     <modules>
         <module>core</module>
