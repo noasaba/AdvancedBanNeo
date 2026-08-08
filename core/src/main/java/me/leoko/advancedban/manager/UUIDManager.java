@@ -189,6 +189,9 @@ public class UUIDManager {
      */
     public String getNameFromUUID(String uuid, boolean forceInitial) {
     	MethodInterface mi = mi();
+        if (uuid == null) {
+            return null;
+        }
         if (mode == FetcherMode.DISABLED)
             return uuid;
 

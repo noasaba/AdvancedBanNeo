@@ -455,6 +455,17 @@ public interface MethodInterface {
     void notify(String perm, List<String> notification);
 
     /**
+     * Publishes a committed punishment change to other runtime instances.
+     * Platforms without a configured transport keep the legacy local-only
+     * behavior through this no-op default.
+     *
+     * @param name target player name
+     * @param uuid target UUID or IP key
+     */
+    default void publishPunishmentUpdate(String name, String uuid) {
+    }
+
+    /**
      * Log a message.
      *
      * @param msg the msg

@@ -8,6 +8,7 @@ import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.TimeManager;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
@@ -55,6 +56,18 @@ public class Punishment {
                 TimeManager.getTime(), end, calculation, -1).createChecked(silent);
     }
 
+    /**
+     * Command-only creation path that performs the duplicate check and write
+     * atomically while retaining the public 2.3.0 create API semantics.
+     */
+    public static DatabaseManager.PunishmentCreationResult createCommandChecked(
+            String name, String target, String reason, String operator, PunishmentType type,
+            Long end, String calculation, boolean silent) {
+        Punishment punishment = new Punishment(name, target, reason, operator,
+                end == -1 ? type.getPermanent() : type, TimeManager.getTime(), end, calculation, -1);
+        return punishment.createCommandChecked(silent);
+    }
+
     public String getReason() {
         return (reason == null ? mi.getString(mi.getConfig(), "DefaultReason", "none") : reason).replaceAll("'", "");
     }
@@ -77,15 +90,7 @@ public class Punishment {
     }
 
     public boolean createChecked(boolean silent) {
-        if (id != -1) {
-            Universal.get().log("!! Failed! AB tried to overwrite the punishment:");
-            Universal.get().log("!! Failed at: " + toString());
-            return false;
-        }
-
-        if (uuid == null) {
-            Universal.get().log("!! Failed! AB has not saved the " + getType().getName() + " because there is no fetched UUID");
-            Universal.get().log("!! Failed at: " + toString());
+        if (!validateForCreation()) {
             return false;
         }
 
@@ -97,33 +102,86 @@ public class Punishment {
                 getName(), getUuid(), getReason(), getOperator(), getType().name(),
                 getStart(), getEnd(), getCalculation());
         if (persistedId == null) {
-            Universal.get().log("!! Failed to save punishment; no notification or action was emitted.");
-            Universal.get().log("!! Failed at: " + toString());
+            logCreationFailure();
             return false;
         }
         id = persistedId;
+        completeCreation(silent, cWarnings);
+        return true;
+    }
+
+    private DatabaseManager.PunishmentCreationResult createCommandChecked(boolean silent) {
+        if (!validateForCreation()) {
+            return DatabaseManager.PunishmentCreationResult.failed();
+        }
+
+        PunishmentType basicType = getType().getBasic();
+        if (basicType != PunishmentType.BAN && basicType != PunishmentType.MUTE) {
+            return createChecked(silent)
+                    ? DatabaseManager.PunishmentCreationResult.created(getId())
+                    : DatabaseManager.PunishmentCreationResult.failed();
+        }
+
+        this.silent = silent;
+        DatabaseManager.PunishmentCreationResult result = DatabaseManager.get().createPunishmentIfAbsent(
+                getType() == PunishmentType.KICK, getUuid(), basicType, TimeManager.getTime(),
+                getName(), getUuid(), getReason(), getOperator(), getType().name(),
+                getStart(), getEnd(), getCalculation());
+        if (result.getStatus() == DatabaseManager.PunishmentCreationResult.Status.CREATED) {
+            id = result.getId();
+            completeCreation(silent, 0);
+        } else if (result.getStatus() == DatabaseManager.PunishmentCreationResult.Status.FAILED) {
+            logCreationFailure();
+        }
+        return result;
+    }
+
+    private boolean validateForCreation() {
+        if (id != -1) {
+            Universal.get().log("!! Failed! AB tried to overwrite the punishment:");
+            Universal.get().log("!! Failed at: " + toString());
+            return false;
+        }
+
+        if (uuid == null) {
+            Universal.get().log("!! Failed! AB has not saved the " + getType().getName() + " because there is no fetched UUID");
+            Universal.get().log("!! Failed at: " + toString());
+            return false;
+        }
+        return true;
+    }
+
+    private void logCreationFailure() {
+        Universal.get().log("!! Failed to save punishment; no notification or action was emitted.");
+        Universal.get().log("!! Failed at: " + toString());
+    }
+
+    private void completeCreation(boolean silent, int cWarnings) {
+        PunishmentManager.get().addLoadedPunishment(this, false);
 
         if (!silent) {
-            announce(cWarnings);
+            runPostCommit("announce punishment", () -> announce(cWarnings));
         }
 
-        if (mi.isOnline(getName())) {
-            final Object p = mi.getPlayer(getName());
+        runPostCommit("apply punishment to an online player", () -> {
+            if (mi.isOnline(getName())) {
+                final Object player = mi.getPlayer(getName());
 
-            if (getType().getBasic() == PunishmentType.BAN || getType() == PunishmentType.KICK) {
-                mi.runSync(() -> mi.kickPlayer(getName(), getLayoutBSN()));
-            } else {
-                if (getType().getBasic() != PunishmentType.NOTE)
-                    for (String str : getLayout()) {
-                        mi.sendMessage(p, str);
+                if (getType().getBasic() == PunishmentType.BAN || getType() == PunishmentType.KICK) {
+                    mi.runSync(() -> mi.kickPlayer(getName(), getLayoutBSN()));
+                } else if (player != null) {
+                    PunishmentManager.get().addLoadedPunishment(this, true);
+                    if (getType().getBasic() != PunishmentType.NOTE) {
+                        for (String str : getLayout()) {
+                            mi.sendMessage(player, str);
+                        }
                     }
-                PunishmentManager.get().getLoadedPunishments(false).add(this);
+                }
             }
-        }
+        });
 
-        PunishmentManager.get().getLoadedHistory().add(this);
-
-        mi.callPunishmentEvent(this);
+        runPostCommit("publish punishment update", () -> mi.publishPunishmentUpdate(getName(), getUuid()));
+        runPostCommit("call punishment event", () -> mi.callPunishmentEvent(this));
 
         if (getType().getBasic() == PunishmentType.WARNING) {
             String cmd = null;
@@ -134,13 +192,14 @@ public class Punishment {
             }
             if (cmd != null) {
                 final String finalCmd = cmd.replace("%PLAYER%", getName()).replace("%COUNT%", cWarnings + "").replace("%REASON%", getReason());
-                mi.runSync(() -> {
-                    mi.executeCommand(finalCmd);
-                    Universal.get().log("Executing command: " + finalCmd);
-                });
+                runPostCommit("schedule warning action", () -> mi.runSync(() -> {
+                    runPostCommit("execute warning action", () -> {
+                        mi.executeCommand(finalCmd);
+                        Universal.get().log("Executing command: " + finalCmd);
+                    });
+                }));
             }
         }
-        return true;
     }
 
     public void updateReason(String reason) {
@@ -196,21 +255,64 @@ public class Punishment {
             return false;
         }
 
+        completeDeletion(who, massClear, removeCache);
+        return true;
+    }
+
+    /**
+     * Deletes every supplied punishment in one database transaction and only
+     * then updates caches, notifications, and existing revoke events.
+     */
+    public static boolean deleteAllChecked(List<Punishment> punishments, String who,
+                                           boolean massClear, boolean removeCache) {
+        if (punishments == null || punishments.isEmpty()) {
+            return false;
+        }
+
+        List<Integer> ids = new ArrayList<>(punishments.size());
+        for (Punishment punishment : punishments) {
+            if (punishment == null || punishment.getType() == PunishmentType.KICK || punishment.getId() == -1) {
+                return false;
+            }
+            ids.add(punishment.getId());
+        }
+
+        if (!DatabaseManager.get().deletePunishmentsAtomically(ids)) {
+            return false;
+        }
+        for (Punishment punishment : punishments) {
+            punishment.completeDeletion(who, massClear, removeCache);
+        }
+        return true;
+    }
+
+    private void completeDeletion(String who, boolean massClear, boolean removeCache) {
         if (removeCache) {
-            PunishmentManager.get().getLoadedPunishments(false).remove(this);
+            PunishmentManager.get().removeLoadedPunishment(getId());
         }
 
         if (who != null) {
-            String message = MessageManager.getMessage("Un" + getType().getBasic().getConfSection("Notification"),
-                    true, "OPERATOR", who, "NAME", getName());
-            mi.notify("ab.undoNotify." + getType().getBasic().getName(), Collections.singletonList(message));
-
-            Universal.get().debug(who + " is deleting a punishment");
+            runPostCommit("announce punishment revocation", () -> {
+                String message = MessageManager.getMessage("Un" + getType().getBasic().getConfSection("Notification"),
+                        true, "OPERATOR", who, "NAME", getName());
+                mi.notify("ab.undoNotify." + getType().getBasic().getName(), Collections.singletonList(message));
+                Universal.get().debug(who + " is deleting a punishment");
+            });
         }
 
-        Universal.get().debug("Deleted punishment " + getId() + " from " + getName() + " punishment reason: " + getReason());
-        mi.callRevokePunishmentEvent(this, massClear);
-        return true;
+        runPostCommit("log punishment revocation", () -> Universal.get().debug(
+                "Deleted punishment " + getId() + " from " + getName() + " punishment reason: " + getReason()));
+        runPostCommit("publish punishment update", () -> mi.publishPunishmentUpdate(getName(), getUuid()));
+        runPostCommit("call punishment revocation event", () -> mi.callRevokePunishmentEvent(this, massClear));
+    }
+
+    private void runPostCommit(String action, Runnable operation) {
+        try {
+            operation.run();
+        } catch (RuntimeException exception) {
+            Universal.get().log("A post-commit action failed while trying to " + action + '.');
+            Universal.get().debugException(exception);
+        }
     }
 
     public List<String> getLayout() {

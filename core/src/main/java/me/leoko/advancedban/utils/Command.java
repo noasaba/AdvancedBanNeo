@@ -157,13 +157,7 @@ public enum Command {
                     }
 
                     String operator = Universal.get().getMethods().getName(input.getSender());
-                    int deleted = 0;
-                    for (Punishment punishment : punishments) {
-                        if (punishment.deleteChecked(operator, true, true)) {
-                            deleted++;
-                        }
-                    }
-                    if (deleted != punishments.size()) {
+                    if (!Punishment.deleteAllChecked(punishments, operator, true, true)) {
                         return;
                     }
                     MessageManager.sendMessage(input.getSender(), "Un" + confSection + ".Clear.Done",
@@ -202,13 +196,7 @@ public enum Command {
                     }
 
                     String operator = Universal.get().getMethods().getName(input.getSender());
-                    int deleted = 0;
-                    for (Punishment punishment : punishments) {
-                        if (punishment.deleteChecked(operator, true, true)) {
-                            deleted++;
-                        }
-                    }
-                    if (deleted != punishments.size()) {
+                    if (!Punishment.deleteAllChecked(punishments, operator, true, true)) {
                         return;
                     }
                     MessageManager.sendMessage(input.getSender(), "Un" + confSection + ".Clear.Done",

@@ -3,6 +3,7 @@ package me.leoko.advancedban.utils.commands;
 import me.leoko.advancedban.MethodInterface;
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.manager.MessageManager;
+import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.TimeManager;
 import me.leoko.advancedban.utils.Command;
@@ -65,16 +66,17 @@ public class PunishmentProcessor implements Consumer<Command.CommandInput> {
         else if (reason.isEmpty())
             reason = null;
 
-        // check if punishment of this type is already active
-        if (alreadyPunished(target, type)) {
+        MethodInterface mi = Universal.get().getMethods();
+        String operator = mi.getName(input.getSender());
+        DatabaseManager.PunishmentCreationResult result = Punishment.createCommandChecked(
+                name, target, reason, operator, type, end, timeTemplate, silent);
+
+        if (result.getStatus() == DatabaseManager.PunishmentCreationResult.Status.ALREADY_ACTIVE) {
             MessageManager.sendMessage(input.getSender(), type.getBasic().getName() + ".AlreadyDone",
                     true, "NAME", name);
             return;
         }
-
-        MethodInterface mi = Universal.get().getMethods();
-        String operator = mi.getName(input.getSender());
-        if (!Punishment.createChecked(name, target, reason, operator, type, end, timeTemplate, silent)) {
+        if (result.getStatus() != DatabaseManager.PunishmentCreationResult.Status.CREATED) {
             return;
         }
 
@@ -204,11 +206,6 @@ public class PunishmentProcessor implements Consumer<Command.CommandInput> {
             }
         }
         return false;
-    }
-
-    private static boolean alreadyPunished(String target, PunishmentType type) {
-        return (type.getBasic() == PunishmentType.MUTE && PunishmentManager.get().isMuted(target))
-                || (type.getBasic() == PunishmentType.BAN && PunishmentManager.get().isBanned(target));
     }
 
     private static class TimeCalculation {
