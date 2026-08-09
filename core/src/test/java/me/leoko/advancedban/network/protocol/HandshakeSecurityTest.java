@@ -41,6 +41,71 @@ class HandshakeSecurityTest {
     }
 
     @Test
+    void productionHandshakeIsBoundToServerFirstChallenge() throws Exception {
+        HandshakeProtocol.ServerChallenge challenge = protocol.createServerChallenge("velocity", NOW);
+        HandshakeProtocol.ServerChallenge acceptedChallenge = protocol.decodeServerChallenge(
+                protocol.encode(challenge), NOW + 1L, 5_000L);
+        HandshakeProtocol.ClientHello client = protocol.createClientHello(
+                "paper-1", NOW + 1L, acceptedChallenge, CREDENTIAL);
+        HandshakeProtocol.ClientHello acceptedClient = protocol.decodeAndVerifyClient(
+                protocol.encode(client), CREDENTIAL, challenge, NOW + 2L, 5_000L);
+        HandshakeProtocol.ServerHello server = protocol.createServerHello(
+                acceptedClient, challenge, NOW + 2L, NOW + 60_000L, CREDENTIAL);
+        HandshakeProtocol.ServerHello acceptedServer = protocol.decodeAndVerifyServer(
+                protocol.encode(server, client.getNonce()), client.getNonce(), acceptedChallenge,
+                CREDENTIAL, NOW + 3L, 5_000L);
+
+        assertEquals("paper-1", acceptedClient.getNodeId());
+        assertEquals("velocity", acceptedServer.getAuthorityNode());
+    }
+
+    @Test
+    void capturedClientHelloCannotBeReplayedAfterAuthorityRestart() throws Exception {
+        HandshakeProtocol.ServerChallenge beforeRestart = protocol.createServerChallenge("velocity", NOW);
+        HandshakeProtocol.ClientHello captured = protocol.createClientHello(
+                "paper-1", NOW, beforeRestart, CREDENTIAL);
+
+        // A restarted Authority has an empty in-memory replay guard, but always issues
+        // a new unpredictable challenge before it accepts a credential proof.
+        HandshakeProtocol restartedAuthority = new HandshakeProtocol();
+        HandshakeProtocol.ServerChallenge afterRestart = restartedAuthority.createServerChallenge(
+                "velocity", NOW + 1L);
+        assertReason(AuthenticationException.Reason.BAD_SIGNATURE,
+                () -> restartedAuthority.decodeAndVerifyClient(protocol.encode(captured), CREDENTIAL,
+                        afterRestart, NOW + 1L, 5_000L));
+    }
+
+    @Test
+    void clientAndServerHellosCannotCrossChallengeTranscripts() throws Exception {
+        HandshakeProtocol.ServerChallenge first = protocol.createServerChallenge("velocity", NOW);
+        HandshakeProtocol.ServerChallenge second = protocol.createServerChallenge("velocity", NOW);
+        HandshakeProtocol.ClientHello client = protocol.createClientHello("paper-1", NOW, first, CREDENTIAL);
+
+        assertReason(AuthenticationException.Reason.BAD_SIGNATURE,
+                () -> protocol.decodeAndVerifyClient(protocol.encode(client), CREDENTIAL,
+                        second, NOW, 1_000L));
+
+        HandshakeProtocol.ServerHello response = protocol.createServerHello(
+                client, first, NOW, NOW + 60_000L, CREDENTIAL);
+        assertReason(AuthenticationException.Reason.BAD_SIGNATURE,
+                () -> protocol.decodeAndVerifyServer(protocol.encode(response, client.getNonce()),
+                        client.getNonce(), second, CREDENTIAL, NOW, 1_000L));
+    }
+
+    @Test
+    void staleOrIncompatibleServerChallengeIsRejected() throws Exception {
+        HandshakeProtocol.ServerChallenge stale = protocol.createServerChallenge("velocity", NOW - 10_000L);
+        assertReason(AuthenticationException.Reason.INVALID_TIMESTAMP,
+                () -> protocol.decodeServerChallenge(protocol.encode(stale), NOW, 1_000L));
+
+        byte[] incompatible = protocol.encode(protocol.createServerChallenge("velocity", NOW));
+        // CHALLENGE_MAGIC occupies bytes 0..3 and protocol version bytes 4..7.
+        incompatible[7] ^= 1;
+        assertReason(AuthenticationException.Reason.INCOMPATIBLE_PROTOCOL,
+                () -> protocol.decodeServerChallenge(incompatible, NOW, 1_000L));
+    }
+
+    @Test
     void wrongCredentialAndTamperingAreRejected() {
         HandshakeProtocol.ClientHello hello = protocol.createClientHello("paper-1", NOW, CREDENTIAL);
         byte[] encoded = protocol.encode(hello);

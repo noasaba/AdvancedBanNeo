@@ -4,6 +4,7 @@ import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.runtime.RuntimeRole;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.PunishmentType;
+import me.leoko.advancedban.utils.SQLQuery;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -167,6 +168,59 @@ class AgentSnapshotAtomicityTest {
             executor.shutdownNow();
         }
         assertFalse(gapSeen.get(), "an UPDATE must replace a mute without a fail-open gap");
+    }
+
+    @Test
+    void historySnapshotSupportsLegacyReadQueriesWithoutDatabaseAccess() {
+        PunishmentManager manager = PunishmentManager.get();
+        String target = "history-user";
+        manager.replaceAgentSnapshot(java.util.Collections.emptyList());
+        List<Punishment> historical = java.util.Arrays.asList(
+                new Punishment("Player", target, "first", "Authority",
+                        PunishmentType.WARNING, 10L, -1L, "warn-layout", 41),
+                new Punishment("Player", target, "second", "Authority",
+                        PunishmentType.NOTE, 20L, -1L, null, 42));
+
+        manager.replaceAgentHistorySnapshot(historical);
+
+        assertEquals(2, manager.getPunishments(target, null, false).size());
+        assertEquals(2, manager.getPunishments(SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY, target).size());
+        assertEquals(1, manager.getPunishments(
+                SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY_BY_CALCULATION,
+                target, "WARN-LAYOUT").size());
+        assertEquals(42, manager.getPunishments(
+                SQLQuery.SELECT_ALL_PUNISHMENTS_HISTORY_LIMIT, 1).get(0).getId());
+        assertEquals(1, manager.getCalculationLevel(target, "warn-layout"));
+
+        manager.appendAgentHistoryPunishment(new Punishment("Player", target, "third", "Authority",
+                PunishmentType.WARNING, 30L, -1L, "warn-layout", 43));
+        manager.appendAgentHistoryPunishment(new Punishment("Player", target, "replacement", "Authority",
+                PunishmentType.WARNING, 30L, -1L, "warn-layout", 43));
+        assertEquals(3, manager.getPunishments(target, null, false).size(),
+                "replayed history appends must remain idempotent by Authority row id");
+
+        manager.applyAgentPunishment(historical.get(0));
+        manager.markAgentSnapshotUnavailable();
+        assertTrue(manager.getLoadedHistory().isEmpty(),
+                "disconnected Agents must not expose stale history as authoritative");
+        assertFalse(manager.getLoadedPunishments(false).isEmpty(),
+                "active state must remain available for fail-closed enforcement");
+    }
+
+    @Test
+    void backendDoesNotBecomeReadyBetweenActiveAndHistorySnapshots() {
+        PunishmentManager manager = PunishmentManager.get();
+        manager.beginAgentSnapshotSynchronization(snapshot(1, 0));
+
+        assertFalse(manager.isAgentSnapshotReady(),
+                "active-only state must not be advertised as a complete API snapshot");
+
+        manager.replaceAgentHistorySnapshot(snapshot(1, 10));
+        assertFalse(manager.isAgentSnapshotReady(),
+                "installing history alone must not publish readiness before the transport ACK boundary");
+
+        manager.completeAgentSnapshotSynchronization();
+        assertTrue(manager.isAgentSnapshotReady());
     }
 
     private List<Punishment> snapshot(int size, int idOffset) {

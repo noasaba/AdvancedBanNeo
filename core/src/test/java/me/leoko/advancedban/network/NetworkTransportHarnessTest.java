@@ -62,11 +62,14 @@ class NetworkTransportHarnessTest {
             DataOutputStream output = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
 
             HandshakeProtocol handshake = new HandshakeProtocol();
-            long now = System.currentTimeMillis();
-            HandshakeProtocol.ClientHello clientHello = handshake.createClientHello(AGENT, now, CREDENTIAL);
+            HandshakeProtocol.ServerChallenge challenge = handshake.decodeServerChallenge(
+                    readFrame(input, 4096), System.currentTimeMillis(),
+                    ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS);
+            HandshakeProtocol.ClientHello clientHello = handshake.createClientHello(
+                    AGENT, System.currentTimeMillis(), challenge, CREDENTIAL);
             writeFrame(output, handshake.encode(clientHello));
             HandshakeProtocol.ServerHello serverHello = handshake.decodeAndVerifyServer(
-                    readFrame(input, 4096), clientHello.getNonce(), CREDENTIAL,
+                    readFrame(input, 4096), clientHello.getNonce(), challenge, CREDENTIAL,
                     System.currentTimeMillis(), ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS);
             byte[] sessionKey = SessionKeyDerivation.derive(CREDENTIAL, serverHello.getSessionId(),
                     AGENT, AUTHORITY, clientHello.getNonce(), serverHello.getAuthorityNonce());
@@ -135,11 +138,13 @@ class NetworkTransportHarnessTest {
             DataOutputStream output = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
             HandshakeProtocol handshake = new HandshakeProtocol();
             long now = System.currentTimeMillis();
+            HandshakeProtocol.ServerChallenge challenge = handshake.createServerChallenge(AUTHORITY, now);
+            writeFrame(output, handshake.encode(challenge));
             HandshakeProtocol.ClientHello client = handshake.decodeAndVerifyClient(
-                    readFrame(input, 4096), CREDENTIAL, now,
+                    readFrame(input, 4096), CREDENTIAL, challenge, now,
                     ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS);
             HandshakeProtocol.ServerHello server = handshake.createServerHello(
-                    client, AUTHORITY, now, now + 60_000L, CREDENTIAL);
+                    client, challenge, now, now + 60_000L, CREDENTIAL);
             writeFrame(output, handshake.encode(server, client.getNonce()));
             byte[] sessionKey = SessionKeyDerivation.derive(CREDENTIAL, server.getSessionId(),
                     AGENT, AUTHORITY, client.getNonce(), server.getAuthorityNonce());

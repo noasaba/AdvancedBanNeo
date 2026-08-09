@@ -103,6 +103,8 @@ class PermissionCompatibilityTest {
         Method runtimeRole = MethodInterface.class.getMethod("getRuntimeRole");
         Method authorityRequest = MethodInterface.class.getMethod(
                 "submitAuthorityRequest", AuthorityRequest.class);
+        Method asyncAuthorityRequest = MethodInterface.class.getMethod(
+                "submitAuthorityRequestAsync", AuthorityRequest.class);
         Method authorityCommand = MethodInterface.class.getMethod(
                 "submitAuthorityCommand", Object.class, String.class, String[].class);
 
@@ -114,6 +116,7 @@ class PermissionCompatibilityTest {
         assertTrue(manifestRegistration.isDefault());
         assertTrue(runtimeRole.isDefault());
         assertTrue(authorityRequest.isDefault());
+        assertTrue(asyncAuthorityRequest.isDefault());
         assertTrue(authorityCommand.isDefault());
         assertEquals(RuntimeRole.STANDALONE_AUTHORITY,
                 runtimeRole.invoke(new RecordingPermissions(dataFolder, false)));

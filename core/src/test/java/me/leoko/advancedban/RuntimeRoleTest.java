@@ -87,6 +87,14 @@ class RuntimeRoleTest {
                 Universal.get().callConnection("Target", "127.0.0.1"));
     }
 
+    @Test
+    void coordinatorCannotBootstrapWithoutItsSoleAuthorityDatabase() {
+        assertThrows(IllegalStateException.class,
+                () -> Universal.verifyAuthorityStorage(RuntimeRole.COORDINATOR_AUTHORITY, false));
+        Universal.verifyAuthorityStorage(RuntimeRole.COORDINATOR_AUTHORITY, true);
+        Universal.verifyAuthorityStorage(RuntimeRole.STANDALONE_AUTHORITY, false);
+    }
+
     private static final class RecordingAgentMethods extends TestMethods {
         private String command;
         private String[] arguments;

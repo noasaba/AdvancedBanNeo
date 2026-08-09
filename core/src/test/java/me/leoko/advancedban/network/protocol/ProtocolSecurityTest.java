@@ -31,6 +31,16 @@ class ProtocolSecurityTest {
     }
 
     @Test
+    void everyRegisteredMessageKindHasAStableAuthenticatedWireId() throws Exception {
+        for (MessageKind kind : MessageKind.values()) {
+            Pair pair = pair(KEY);
+            ProtocolPacket accepted = pair.authority.open(
+                    codec.decode(codec.encode(pair.agent.seal(kind, new byte[0], NOW))), NOW);
+            assertEquals(kind, accepted.getKind());
+        }
+    }
+
+    @Test
     void wrongCredentialAndModifiedPayloadAreRejected() {
         Pair pair = pair(KEY);
         SignedPacket original = pair.agent.seal(MessageKind.APPLY, bytes("original"), NOW);
