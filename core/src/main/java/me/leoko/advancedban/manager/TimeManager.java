@@ -3,18 +3,24 @@ package me.leoko.advancedban.manager;
 import me.leoko.advancedban.Universal;
 
 import java.util.Date;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The Time Manager is used to have a centralized time for advanced ban which can be different from the system's time.
  */
 public class TimeManager {
+    private static final Pattern DURATION_PATTERN = Pattern.compile("([0-9]+)(mo|[wdhms])");
+
     /**
      * Get the current timestamp in milliseconds.
      *
      * @return the timestamp
      */
     public static long getTime() {
-        return new Date().getTime() + Universal.get().getMethods().getInteger(Universal.get().getMethods().getConfig(), "TimeDiff", 0) * 60 * 60 * 1000;
+        return new Date().getTime() + Universal.get().getMethods().getInteger(
+                Universal.get().getMethods().getConfig(), "TimeDiff", 0) * 60L * 60L * 1000L;
     }
 
     /**
@@ -25,25 +31,50 @@ public class TimeManager {
      * @return the amount of milliseconds equivalent to the given string
      */
     public static long toMilliSec(String s) {
-        // This is not my regex :P | From: http://stackoverflow.com/a/8270824
-        String[] sl = s.toLowerCase().split("(?<=\\D)(?=\\d)|(?<=\\d)(?=\\D)");
+        if (s == null) {
+            return -1;
+        }
 
-        long i = Long.parseLong(sl[0]);
-        switch (sl[1]) {
+        Matcher matcher = DURATION_PATTERN.matcher(s.toLowerCase(Locale.ROOT));
+        if (!matcher.matches()) {
+            return -1;
+        }
+
+        final long amount;
+        try {
+            amount = Long.parseLong(matcher.group(1));
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+
+        final long multiplier;
+        switch (matcher.group(2)) {
             case "s":
-                return i * 1000;
+                multiplier = 1000L;
+                break;
             case "m":
-                return i * 1000 * 60;
+                multiplier = 1000L * 60L;
+                break;
             case "h":
-                return i * 1000 * 60 * 60;
+                multiplier = 1000L * 60L * 60L;
+                break;
             case "d":
-                return i * 1000 * 60 * 60 * 24;
+                multiplier = 1000L * 60L * 60L * 24L;
+                break;
             case "w":
-                return i * 1000 * 60 * 60 * 24 * 7;
+                multiplier = 1000L * 60L * 60L * 24L * 7L;
+                break;
             case "mo":
-                return i * 1000 * 60 * 60 * 24 * 30;
+                multiplier = 1000L * 60L * 60L * 24L * 30L;
+                break;
             default:
                 return -1;
+        }
+
+        try {
+            return Math.multiplyExact(amount, multiplier);
+        } catch (ArithmeticException ignored) {
+            return -1;
         }
     }
 }

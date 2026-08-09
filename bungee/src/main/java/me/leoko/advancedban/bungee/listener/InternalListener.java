@@ -3,13 +3,13 @@ package me.leoko.advancedban.bungee.listener;
 import com.google.common.io.ByteArrayDataInput;
 import com.google.common.io.ByteArrayDataOutput;
 import com.google.common.io.ByteStreams;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonSyntaxException;
+import com.google.gson.JsonParseException;
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.bungee.event.PunishmentEvent;
 import me.leoko.advancedban.bungee.event.RevokePunishmentEvent;
 import me.leoko.advancedban.manager.TimeManager;
-import me.leoko.advancedban.manager.UUIDManager;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.PunishmentType;
 import net.md_5.bungee.api.ProxyServer;
@@ -31,12 +31,12 @@ public class InternalListener implements Listener {
 
     @EventHandler
     public void onPunish(PunishmentEvent e) {
-        sendToBukkit("Punish", Arrays.asList(e.getPunishment().toString()));
+        sendToBukkit("Punish", Arrays.asList(serializePunishment(e.getPunishment())));
     }
 
     @EventHandler
     public void onUnPunish(RevokePunishmentEvent e) {
-        sendToBukkit("Unpunish", Arrays.asList(e.getPunishment().toString()));
+        sendToBukkit("Unpunish", Arrays.asList(serializePunishment(e.getPunishment())));
     }
 
     @EventHandler
@@ -53,21 +53,16 @@ public class InternalListener implements Listener {
             case "Punish":
                 String message = in.readUTF();
                 try {
-                    JsonObject punishment = universal.getGson().fromJson(message, JsonObject.class);
+                    Punishment punishment = deserializePunishment(message);
                     new Punishment(
-                            punishment.get("name").getAsString(),
-                            UUIDManager.get().getUUID(punishment.get("uuid").getAsString()),
-                            punishment.get("reason").getAsString(),
-                            punishment.get("operator") != null ? punishment.get("operator").getAsString() : "CONSOLE",
-                            PunishmentType.valueOf(punishment.get("punishmenttype").getAsString().toUpperCase()),
-                            punishment.get("start") != null ? punishment.get("start").getAsLong() : TimeManager.getTime(),
-                            TimeManager.getTime() + punishment.get("end").getAsLong(),
-                            punishment.get("calculation") != null ? punishment.get("calculation").getAsString() : null,
+                            punishment.getName(), punishment.getUuid(), punishment.getReason(),
+                            punishment.getOperator() != null ? punishment.getOperator() : "CONSOLE",
+                            punishment.getType(), punishment.getStart(), punishment.getEnd(), punishment.getCalculation(),
                             -1
-                    ).create(punishment.get("silent") != null && punishment.get("silent").getAsBoolean());
+                    ).create(punishment.isSilent());
                     universal.log("A punishment was created using PluginMessaging listener.");
-                    universal.debug(punishment.toString());
-                } catch (JsonSyntaxException | NullPointerException ex) {
+                    universal.debug(message);
+                } catch (JsonParseException | IllegalArgumentException | NullPointerException ex) {
                     universal.log("An exception as occurred while reading a punishment from plugin messaging channel.");
                     universal.debug("Message: " + message);
                     universal.log("StackTrace:");
@@ -85,5 +80,32 @@ public class InternalListener implements Listener {
         out.writeUTF(channel);
         messages.forEach(out::writeUTF);
         ProxyServer.getInstance().getServers().keySet().forEach(server -> ProxyServer.getInstance().getServerInfo(server).sendData("advancedban:main", out.toByteArray(), true));
+    }
+
+    static String serializePunishment(Punishment punishment) {
+        return Universal.get().getGson().toJson(punishment);
+    }
+
+    static Punishment deserializePunishment(String message) {
+        JsonObject payload = Universal.get().getGson().fromJson(message, JsonObject.class);
+        if (payload.has("type")) {
+            return Universal.get().getGson().fromJson(payload, Punishment.class);
+        }
+
+        long end = payload.get("end").getAsLong();
+        JsonElement reason = payload.get("reason");
+        JsonElement operator = payload.get("operator");
+        JsonElement start = payload.get("start");
+        JsonElement calculation = payload.get("calculation");
+        JsonElement silent = payload.get("silent");
+        return new Punishment(
+                payload.get("name").getAsString(), payload.get("uuid").getAsString(),
+                reason == null || reason.isJsonNull() ? null : reason.getAsString(),
+                operator == null || operator.isJsonNull() ? "CONSOLE" : operator.getAsString(),
+                PunishmentType.valueOf(payload.get("punishmenttype").getAsString().toUpperCase()),
+                start == null || start.isJsonNull() ? TimeManager.getTime() : start.getAsLong(),
+                end == -1 ? -1 : TimeManager.getTime() + end,
+                calculation == null || calculation.isJsonNull() ? null : calculation.getAsString(),
+                -1, silent != null && !silent.isJsonNull() && silent.getAsBoolean());
     }
 }

@@ -9,6 +9,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The UUID Manager used to resolve and cache the UUIDs.
@@ -16,7 +17,7 @@ import java.util.Map.Entry;
 public class UUIDManager {
     private static UUIDManager instance = null;
     private FetcherMode mode;
-    private final Map<String, String> activeUUIDs = new HashMap<>();
+    private final Map<String, String> activeUUIDs = new ConcurrentHashMap<>();
     
     private MethodInterface mi() {
     	return Universal.get().getMethods();
@@ -123,12 +124,22 @@ public class UUIDManager {
      * @return
      */
     public UUID fromString(String uuid) {
+        if (uuid == null) {
+            return null;
+        }
         if (!uuid.contains("-") && uuid.length() == 32)
             uuid = uuid
                     .replaceFirst(
                             "(\\p{XDigit}{8})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}+)", "$1-$2-$3-$4-$5");
 
-        return uuid.length() == 36 && uuid.contains("-") ? UUID.fromString(uuid) : null;
+        if (uuid.length() != 36 || !uuid.contains("-")) {
+            return null;
+        }
+        try {
+            return UUID.fromString(uuid);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     /**
@@ -178,6 +189,9 @@ public class UUIDManager {
      */
     public String getNameFromUUID(String uuid, boolean forceInitial) {
     	MethodInterface mi = mi();
+        if (uuid == null) {
+            return null;
+        }
         if (mode == FetcherMode.DISABLED)
             return uuid;
 
@@ -194,10 +208,16 @@ public class UUIDManager {
             }
         }
 
-        try (Scanner scanner = new Scanner(new URL("https://api.mojang.com/user/profiles/" + uuid + "/names").openStream(), "UTF-8")) {
+        try {
+            HttpURLConnection connection = (HttpURLConnection) new URL(
+                    "https://api.mojang.com/user/profiles/" + uuid + "/names").openConnection();
+            connection.setConnectTimeout(Universal.HTTP_TIMEOUT_MILLIS);
+            connection.setReadTimeout(Universal.HTTP_TIMEOUT_MILLIS);
+            try (Scanner scanner = new Scanner(connection.getInputStream(), "UTF-8")) {
             String s = scanner.useDelimiter("\\A").next();
             s = s.substring(s.lastIndexOf('{'), s.lastIndexOf('}') + 1);
             return mi.parseJSON(s, "name");
+            }
         } catch (Exception exc) {
             return null;
         }
@@ -209,6 +229,8 @@ public class UUIDManager {
     	MethodInterface mi = mi();
         name = name.toLowerCase();
         HttpURLConnection request = (HttpURLConnection) new URL(url.replaceAll("%NAME%", name).replaceAll("%TIMESTAMP%", new Date().getTime() + "")).openConnection();
+        request.setConnectTimeout(Universal.HTTP_TIMEOUT_MILLIS);
+        request.setReadTimeout(Universal.HTTP_TIMEOUT_MILLIS);
         request.connect();
 
         String uuid = mi.parseJSON(new InputStreamReader(request.getInputStream()), key);

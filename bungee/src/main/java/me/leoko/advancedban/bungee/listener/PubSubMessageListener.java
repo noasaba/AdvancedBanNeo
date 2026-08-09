@@ -20,27 +20,44 @@ public class PubSubMessageListener implements Listener {
 	@EventHandler
     public void onMessageReceive(PubSubMessageEvent e) {
         if (e.getChannel().equals("advancedban:main")) {
-            String[] msg = e.getMessage().split(" ");
+            String[] msg = e.getMessage().split(" ", 3);
             if (e.getMessage().startsWith("kick ")) {
-                if (ProxyServer.getInstance().getPlayer(msg[1]) != null) {
+                if (msg.length >= 3 && ProxyServer.getInstance().getPlayer(msg[1]) != null) {
                     ProxyServer.getInstance().getPlayer(msg[1]).disconnect(e.getMessage().substring((msg[0] + msg[1]).length() + 2));
                 }
             } else if (e.getMessage().startsWith("notification ")) {
+                if (msg.length < 3) {
+                    return;
+                }
                 for (ProxiedPlayer pp : ProxyServer.getInstance().getPlayers()) {
                     if (mi.hasPerms(pp, msg[1])) {
                         mi.sendMessage(pp, e.getMessage().substring((msg[0] + msg[1]).length() + 2));
                     }
                 }
             } else if (e.getMessage().startsWith("message ")) {
+                if (msg.length < 3) {
+                    return;
+                }
                 if (ProxyServer.getInstance().getPlayer(msg[1]) != null) {
                     ProxyServer.getInstance().getPlayer(msg[1]).sendMessage(e.getMessage().substring((msg[0] + msg[1]).length() + 2));
                 }
                 if (msg[1].equalsIgnoreCase("CONSOLE")) {
                     ProxyServer.getInstance().getConsole().sendMessage(e.getMessage().substring((msg[0] + msg[1]).length() + 2));
                 }
+            } else if (e.getMessage().startsWith("invalidate ") && msg.length == 3) {
+                me.leoko.advancedban.manager.PunishmentManager manager =
+                        me.leoko.advancedban.manager.PunishmentManager.get();
+                String ip = Universal.get().getIps().get(msg[1].toLowerCase());
+                if (manager.isCached(msg[1].toLowerCase()) || manager.isCached(msg[2])
+                        || (ip != null && manager.isCached(ip))) {
+                    mi.runAsync(() -> manager.reload(msg[1].toLowerCase(), msg[2], ip));
+                }
             }
         } else if (e.getChannel().equals("advancedban:connection")) {
-            String[] msg = e.getMessage().split(",");
+            String[] msg = e.getMessage().split(",", 2);
+            if (msg.length != 2) {
+                return;
+            }
             Universal.get().getIps().remove(msg[0].toLowerCase());
             Universal.get().getIps().put(msg[0].toLowerCase(), msg[1]);
         }

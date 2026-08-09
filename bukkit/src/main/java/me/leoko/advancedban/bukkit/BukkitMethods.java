@@ -32,7 +32,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 /**
  * Created by Leoko @ dev.skamps.eu on 23.07.2016.
@@ -89,6 +92,8 @@ public class BukkitMethods implements MethodInterface {
     public String getFromUrlJson(String url, String key) {
         try {
             HttpURLConnection request = (HttpURLConnection) new URL(url).openConnection();
+            request.setConnectTimeout(Universal.HTTP_TIMEOUT_MILLIS);
+            request.setReadTimeout(Universal.HTTP_TIMEOUT_MILLIS);
             request.connect();
 
             JSONParser jp = new JSONParser();
@@ -158,13 +163,18 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public void setCommandExecutor(String cmd, String permission, TabCompleter tabCompleter) {
+        setCommandExecutor(cmd, tabCompleter);
+    }
+
+    @Override
+    public void setCommandExecutor(String cmd, TabCompleter tabCompleter) {
         boolean friendly = getBoolean(getConfig(), "Friendly Register Commands", false);
         PluginCommand command = (friendly) ? getPlugin().getCommand(cmd) : Bukkit.getPluginCommand(cmd);
         if (command != null) {
             command.setExecutor(CommandReceiver.get());
             if (tabCompleter != null)
                 command.setTabCompleter((commandSender, c, s, args) -> {
-                    if (permission != null && !hasPerms(commandSender, permission))
+                    if (command.getPermission() != null && !hasPerms(commandSender, command.getPermission()))
                         return Collections.emptyList();
                     return tabCompleter.onTabComplete(commandSender, args);
                 });
@@ -175,44 +185,51 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public void sendMessage(Object player, String msg) {
-        ((CommandSender) player).sendMessage(msg);
+        callSync(() -> {
+            ((CommandSender) player).sendMessage(msg);
+            return null;
+        });
     }
 
     @Override
     public boolean hasPerms(Object player, String perms) {
-        return ((CommandSender) player).hasPermission(perms);
+        return callSync(() -> ((CommandSender) player).hasPermission(perms));
     }
 
     @Override
     public Permissionable getOfflinePermissionPlayer(String name) {
-        OfflinePlayer player = Bukkit.getOfflinePlayer(name);
-        if (permissionVault == null || player == null || !player.hasPlayedBefore())
+        OfflinePlayer player = callSync(() -> Bukkit.getOfflinePlayer(name));
+        if (permissionVault == null || player == null || !callSync(player::hasPlayedBefore))
             return permission -> false;
 
-        return permission -> permissionVault.apply(player, permission);
+        return permission -> callSync(() -> permissionVault.apply(player, permission));
     }
 
     @SuppressWarnings("deprecation")
     @Override
     public boolean isOnline(String name) {
-        return Bukkit.getOfflinePlayer(name).isOnline();
+        return callSync(() -> Bukkit.getOfflinePlayer(name).isOnline());
     }
 
     @Override
     public Player getPlayer(String name) {
-        return Bukkit.getPlayer(name);
+        return callSync(() -> Bukkit.getPlayer(name));
     }
 
     @Override
     public void kickPlayer(String player, String reason) {
-        if (getPlayer(player) != null && getPlayer(player).isOnline()) {
-            getPlayer(player).kickPlayer(reason);
-        }
+        callSync(() -> {
+            Player target = Bukkit.getPlayer(player);
+            if (target != null && target.isOnline()) {
+                target.kickPlayer(reason);
+            }
+            return null;
+        });
     }
 
     @Override
     public Player[] getOnlinePlayers() {
-        return Bukkit.getOnlinePlayers().toArray(new Player[]{});
+        return callSync(() -> Bukkit.getOnlinePlayers().toArray(new Player[]{}));
     }
 
     @Override
@@ -237,33 +254,35 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public void executeCommand(String cmd) {
-        Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
+        callSync(() -> Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd));
     }
 
     @Override
     public String getName(Object player) {
-        return ((CommandSender) player).getName();
+        return callSync(() -> ((CommandSender) player).getName());
     }
 
     @Override
     public String getName(String uuid) {
-        return Bukkit.getOfflinePlayer(UUID.fromString(uuid)).getName();
+        UUID parsed = UUIDManager.get().fromString(uuid);
+        return parsed == null ? null : callSync(() -> Bukkit.getOfflinePlayer(parsed).getName());
     }
 
     @Override
     public String getIP(Object player) {
-        return ((Player) player).getAddress().getHostName();
+        return callSync(() -> ((Player) player).getAddress().getAddress().getHostAddress());
     }
 
     @Override
     public String getInternUUID(Object player) {
-        return player instanceof OfflinePlayer ? ((OfflinePlayer) player).getUniqueId().toString().replaceAll("-", "") : "none";
+        return callSync(() -> player instanceof OfflinePlayer
+                ? ((OfflinePlayer) player).getUniqueId().toString().replaceAll("-", "") : "none");
     }
 
     @SuppressWarnings("deprecation")
     @Override
     public String getInternUUID(String player) {
-        return Bukkit.getOfflinePlayer(player).getUniqueId().toString().replaceAll("-", "");
+        return callSync(() -> Bukkit.getOfflinePlayer(player).getUniqueId().toString().replaceAll("-", ""));
     }
 
     @Override
@@ -278,6 +297,9 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public boolean callCMD(Object player, String cmd) {
+        if (cmd == null || cmd.length() < 2) {
+            return false;
+        }
         Punishment pnt;
         if (Universal.get().isMuteCommand(cmd.substring(1)) && (pnt = PunishmentManager.get().getMute(UUIDManager.get().getUUID(getName(player)))) != null) {
             pnt.getLayout().forEach(str -> sendMessage(player, str));
@@ -377,15 +399,18 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public boolean isOnlineMode() {
-        return Bukkit.getOnlineMode();
+        return callSync(Bukkit::getOnlineMode);
     }
 
     @Override
     public void notify(String perm, List<String> notification) {
-        Bukkit.getOnlinePlayers()
-                .stream()
-                .filter(player -> hasPerms(player, perm))
-                .forEach(player -> notification.forEach(str -> sendMessage(player, str)));
+        callSync(() -> {
+            Bukkit.getOnlinePlayers()
+                    .stream()
+                    .filter(player -> player.hasPermission(perm))
+                    .forEach(player -> notification.forEach(player::sendMessage));
+            return null;
+        });
     }
 
     @Override
@@ -396,5 +421,22 @@ public class BukkitMethods implements MethodInterface {
     @Override
     public boolean isUnitTesting() {
         return false;
+    }
+
+    private <T> T callSync(Supplier<T> action) {
+        if (Bukkit.isPrimaryThread()) {
+            return action.get();
+        }
+
+        FutureTask<T> task = new FutureTask<>(action::get);
+        Bukkit.getScheduler().runTask(getPlugin(), task);
+        try {
+            return task.get();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for the Bukkit main thread", exception);
+        } catch (ExecutionException exception) {
+            throw new IllegalStateException("Bukkit main-thread operation failed", exception.getCause());
+        }
     }
 }

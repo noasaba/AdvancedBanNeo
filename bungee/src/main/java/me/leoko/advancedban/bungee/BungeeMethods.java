@@ -108,6 +108,8 @@ public class BungeeMethods implements MethodInterface {
     public String getFromUrlJson(String url, String key) {
         try {
             HttpURLConnection request = (HttpURLConnection) new URL(url).openConnection();
+            request.setConnectTimeout(Universal.HTTP_TIMEOUT_MILLIS);
+            request.setReadTimeout(Universal.HTTP_TIMEOUT_MILLIS);
             request.connect();
 
             JsonParser jp = new JsonParser();
@@ -226,12 +228,13 @@ public class BungeeMethods implements MethodInterface {
 
     @Override
     public void kickPlayer(String player, String reason) {
-        if(BungeeMain.getCloudSupport() != null){
-            BungeeMain.getCloudSupport().kick(getPlayer(player).getUniqueId(), reason);
+        ProxiedPlayer target = getPlayer(player);
+        if(BungeeMain.getCloudSupport() != null && target != null){
+            BungeeMain.getCloudSupport().kick(target.getUniqueId(), reason);
         }else if (Universal.isRedis()) {
             RedisBungee.getApi().sendChannelMessage("advancedban:main", "kick " + player + " " + reason);
-        } else {
-            getPlayer(player).disconnect(TextComponent.fromLegacyText(reason));
+        } else if (target != null) {
+            target.disconnect(TextComponent.fromLegacyText(reason));
         }
     }
 
@@ -272,12 +275,14 @@ public class BungeeMethods implements MethodInterface {
 
     @Override
     public String getName(String uuid) {
-        return ProxyServer.getInstance().getPlayer(UUID.fromString(uuid)).getName();
+        UUID parsed = UUIDManager.get().fromString(uuid);
+        ProxiedPlayer player = parsed == null ? null : ProxyServer.getInstance().getPlayer(parsed);
+        return player == null ? null : player.getName();
     }
 
     @Override
     public String getIP(Object player) {
-        return ((ProxiedPlayer) player).getAddress().getHostName();
+        return ((ProxiedPlayer) player).getAddress().getAddress().getHostAddress();
     }
 
     @Override
@@ -309,6 +314,9 @@ public class BungeeMethods implements MethodInterface {
 
     @Override
     public boolean callCMD(Object player, String cmd) {
+        if (cmd == null || cmd.length() < 2) {
+            return false;
+        }
         Punishment pnt;
         if (Universal.get().isMuteCommand(cmd.substring(1))
                 && (pnt = PunishmentManager.get().getMute(UUIDManager.get().getUUID(getName(player)))) != null) {
@@ -424,6 +432,13 @@ public class BungeeMethods implements MethodInterface {
                     .stream()
                     .filter((pp) -> (Universal.get().hasPerms(pp, perm)))
                     .forEachOrdered((pp) -> notification.forEach((str) -> sendMessage(pp, str)));
+        }
+    }
+
+    @Override
+    public void publishPunishmentUpdate(String name, String uuid) {
+        if (Universal.isRedis() && name != null && uuid != null) {
+            RedisBungee.getApi().sendChannelMessage("advancedban:main", "invalidate " + name + " " + uuid);
         }
     }
 

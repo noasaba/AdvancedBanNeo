@@ -7,7 +7,9 @@ import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.fail;
@@ -17,6 +19,16 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 public class TestMethods implements MethodInterface {
 	private final File dataFolder;
+	private final Object config = new Object();
+	private final Object messages = new Object();
+	private final Object layouts = new Object();
+	private final Map<String, String> messageValues = new HashMap<>();
+	private final Map<String, Integer> integerValues = new HashMap<>();
+	private final Map<String, List<String>> stringListValues = new HashMap<>();
+	private final List<String> sentMessages = new ArrayList<>();
+	private static final List<String> executedCommands = new ArrayList<>();
+	private boolean online;
+	private boolean permissions = true;
 	
     public TestMethods(File dataFolder){
     	this.dataFolder = Objects.requireNonNull(dataFolder);
@@ -46,18 +58,17 @@ public class TestMethods implements MethodInterface {
 
     @Override
     public Object getConfig() {
-        return null;
+        return config;
     }
 
     @Override
     public Object getMessages() {
-        return null;
+        return messages;
     }
 
     @Override
     public Object getLayouts() {
-        fail("This method has not been setup for tests yet. Edit the me.leoko.advancedban.TestMethods Class! #5");
-        return null;
+        return layouts;
     }
 
     @Override
@@ -93,6 +104,7 @@ public class TestMethods implements MethodInterface {
 
     @Override
     public void sendMessage(Object player, String msg) {
+        sentMessages.add(msg);
         System.out.println("Message: "+player+" -> "+msg);
     }
 
@@ -124,7 +136,7 @@ public class TestMethods implements MethodInterface {
 
     @Override
     public boolean hasPerms(Object player, String perms) {
-        return true;
+        return permissions;
     }
 
     @Override
@@ -134,13 +146,12 @@ public class TestMethods implements MethodInterface {
 
     @Override
     public boolean isOnline(String name) {
-        return false;
+        return online;
     }
 
     @Override
     public Object getPlayer(String name) {
-        fail("This method has not been setup for tests yet. Edit the me.leoko.advancedban.TestMethods Class! #10");
-        return null;
+        return name;
     }
 
     @Override
@@ -176,7 +187,7 @@ public class TestMethods implements MethodInterface {
 
     @Override
     public void executeCommand(String cmd) {
-        fail("This method has not been setup for tests yet. Edit the me.leoko.advancedban.TestMethods Class! #17");
+        executedCommands.add(cmd);
     }
 
     @Override
@@ -217,6 +228,12 @@ public class TestMethods implements MethodInterface {
 
     @Override
     public String getString(Object file, String path) {
+        if (file == messages && messageValues.containsKey(path)) {
+            return messageValues.get(path);
+        }
+        if (file == config && path.equals("WarnActions.1")) {
+            return "broadcast %REASON%";
+        }
         return path;
     }
 
@@ -234,7 +251,7 @@ public class TestMethods implements MethodInterface {
 
     @Override
     public List<String> getStringList(Object file, String path) {
-        return new ArrayList<>();
+        return new ArrayList<>(stringListValues.getOrDefault(path, new ArrayList<>()));
     }
 
     @Override
@@ -260,7 +277,7 @@ public class TestMethods implements MethodInterface {
 
     @Override
     public int getInteger(Object file, String path, int def) {
-        return def;
+        return file == config ? integerValues.getOrDefault(path, def) : def;
     }
 
     @Override
@@ -302,5 +319,33 @@ public class TestMethods implements MethodInterface {
     @Override
     public boolean isUnitTesting() {
         return true;
+    }
+
+    public void setMessage(String path, String value) {
+        messageValues.put(path, value);
+    }
+
+    public void setInteger(String path, int value) {
+        integerValues.put(path, value);
+    }
+
+    public void setStringList(String path, List<String> value) {
+        stringListValues.put(path, new ArrayList<>(value));
+    }
+
+    public void setOnline(boolean online) {
+        this.online = online;
+    }
+
+    public void setPermissions(boolean permissions) {
+        this.permissions = permissions;
+    }
+
+    public List<String> getSentMessages() {
+        return sentMessages;
+    }
+
+    public List<String> getExecutedCommands() {
+        return executedCommands;
     }
 }

@@ -27,21 +27,32 @@ public class ConnectionListenerBungee implements Listener {
         UUIDManager.get().supplyInternUUID(event.getConnection().getName(), event.getConnection().getUniqueId());
         event.registerIntent((BungeeMain)Universal.get().getMethods().getPlugin());
         Universal.get().getMethods().runAsync(() -> {
-            String result = Universal.get().callConnection(event.getConnection().getName(), event.getConnection().getAddress().getAddress().getHostAddress());
+            try {
+                String result = Universal.get().callConnection(event.getConnection().getName(), event.getConnection().getAddress().getAddress().getHostAddress());
 
-            if (result != null) {
-                if(BungeeMain.getCloudSupport() != null){
-                    BungeeMain.getCloudSupport().kick(event.getConnection().getUniqueId(), result);
-                }else {
+                if (result != null) {
+                    // Always deny this proxy login first. CloudNet is only needed to
+                    // propagate the kick to an already connected network player.
                     event.setCancelled(true);
                     event.setCancelReason(result);
+                    if(BungeeMain.getCloudSupport() != null){
+                        BungeeMain.getCloudSupport().kick(event.getConnection().getUniqueId(), result);
+                    }
                 }
-            }
 
-            if (Universal.isRedis()) {
-                RedisBungee.getApi().sendChannelMessage("advancedban:connection", event.getConnection().getName() + "," + event.getConnection().getAddress().getAddress().getHostAddress());
+                if (Universal.isRedis()) {
+                    RedisBungee.getApi().sendChannelMessage("advancedban:connection", event.getConnection().getName() + "," + event.getConnection().getAddress().getAddress().getHostAddress());
+                }
+            } catch (RuntimeException ex) {
+                Universal.get().log("Failed to load player data during proxy login.");
+                Universal.get().debugException(ex);
+                if (Universal.get().getMethods().getBoolean(Universal.get().getMethods().getConfig(), "LockdownOnError", true)) {
+                    event.setCancelled(true);
+                    event.setCancelReason("[AdvancedBan] Failed to load player data!");
+                }
+            } finally {
+                event.completeIntent((BungeeMain) Universal.get().getMethods().getPlugin());
             }
-            event.completeIntent((BungeeMain) Universal.get().getMethods().getPlugin());
         });
     }
 

@@ -113,7 +113,7 @@ public class MessageManager {
 
     private static String replace(String str, String... parameters) {
         for (int i = 0; i < parameters.length - 1; i = i + 2) {
-            str = str.replaceAll("%" + parameters[i] + "%", parameters[i + 1]);
+            str = str.replace("%" + parameters[i] + "%", parameters[i + 1]);
         }
         return str;
     }

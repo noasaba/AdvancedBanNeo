@@ -14,10 +14,10 @@
     <packaging>jar</packaging>
 
     <repositories>
-    	<!-- Spigot API -->
+        <!-- Paper API -->
         <repository>
-            <id>spigot-repo</id>
-            <url>https://hub.spigotmc.org/nexus/content/repositories/snapshots/</url>
+            <id>papermc</id>
+            <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
         <!-- bStats -->
         <repository>
@@ -33,9 +33,9 @@
 
     <dependencies>
         <dependency>
-            <groupId>org.spigotmc</groupId>
-            <artifactId>spigot-api</artifactId>
-            <version>1.12-R0.1-SNAPSHOT</version>
+            <groupId>io.papermc.paper</groupId>
+            <artifactId>paper-api</artifactId>
+            <version>26.2.build.87-stable</version>
             <scope>provided</scope>
         </dependency>
 

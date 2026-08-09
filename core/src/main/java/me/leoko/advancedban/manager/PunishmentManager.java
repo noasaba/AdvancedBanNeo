@@ -9,6 +9,8 @@ import me.leoko.advancedban.utils.SQLQuery;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The Punishment Manager handles the punishments. It loads and parses them from the database, caches them
@@ -17,9 +19,11 @@ import java.util.*;
 public class PunishmentManager {
 
     private static PunishmentManager instance = null;
-    private final Set<Punishment> punishments = Collections.synchronizedSet(new HashSet<>());
-    private final Set<Punishment> history = Collections.synchronizedSet(new HashSet<>());
-    private final Set<String> cached = Collections.synchronizedSet(new HashSet<>());
+    private final Set<Punishment> punishments = ConcurrentHashMap.newKeySet();
+    private final Set<Punishment> history = ConcurrentHashMap.newKeySet();
+    private final Set<String> cached = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean refreshingOnlinePlayers = new AtomicBoolean();
+    private final Object cacheRefreshLock = new Object();
     
     private Universal universal() {
     	return Universal.get();
@@ -39,6 +43,16 @@ public class PunishmentManager {
      */
     public void setup() {
         DatabaseManager.get().executeStatement(SQLQuery.DELETE_OLD_PUNISHMENTS, TimeManager.getTime());
+        if (!universal().getMethods().isUnitTesting()) {
+            universal().getMethods().scheduleAsyncRep(this::cleanupExpired, 1200L, 1200L);
+            long syncSeconds = universal().getMethods().getLong(
+                    universal().getMethods().getConfig(), "MySQLCacheSyncInterval", 0L);
+            if (DatabaseManager.get().isUseMySQL() && syncSeconds > 0L) {
+                long maximumTicks = Long.MAX_VALUE / 50L;
+                long syncTicks = syncSeconds > maximumTicks / 20L ? maximumTicks : syncSeconds * 20L;
+                universal().getMethods().scheduleAsyncRep(this::refreshOnlinePlayers, syncTicks, syncTicks);
+            }
+        }
         // Seems useless as the Interim Data which get's loaded just is ignored
 //        for (Object player : mi.getOnlinePlayers()) {
 //            String name = mi.getName(player).toLowerCase();
@@ -80,23 +94,65 @@ public class PunishmentManager {
         return new InterimData(uuid, name, ip, punishments, history);
     }
 
+    private Set<Punishment> loadCurrent(String uuid, String ip) {
+        Set<Punishment> current = new HashSet<>();
+        try (ResultSet results = DatabaseManager.get().executeResultStatement(
+                SQLQuery.SELECT_USER_PUNISHMENTS_WITH_IP, uuid, ip)) {
+            if (results == null) {
+                return null;
+            }
+            while (results.next()) {
+                current.add(getPunishmentFromResultSet(results));
+            }
+            return current;
+        } catch (SQLException exception) {
+            universal().log("An error has occurred refreshing current punishments.");
+            universal().debugSqlException(exception);
+            return null;
+        }
+    }
+
     /**
      * Discard a players punishments from the cache.
      *
      * @param name the name
      */
     public void discard(String name) {
+        if (name == null) {
+            return;
+        }
         name = name.toLowerCase();
         String ip = Universal.get().getIps().get(name);
         String uuid = UUIDManager.get().getUUID(name);
-        cached.remove(name);
-        cached.remove(uuid);
-        cached.remove(ip);
+        invalidate(name, uuid, ip);
+    }
+
+    /**
+     * Invalidates local punishment data without performing a UUID lookup.
+     * Network transports use the already resolved UUID/IP key.
+     */
+    public void invalidate(String name, String uuid, String ip) {
+        synchronized (cacheRefreshLock) {
+            invalidateLocked(name, uuid, ip);
+        }
+    }
+
+    private void invalidateLocked(String name, String uuid, String ip) {
+        name = name == null ? null : name.toLowerCase();
+        if (name != null) {
+            cached.remove(name);
+        }
+        if (uuid != null) {
+            cached.remove(uuid);
+        }
+        if (ip != null) {
+            cached.remove(ip);
+        }
 
         Iterator<Punishment> iterator = punishments.iterator();
         while (iterator.hasNext()) {
             Punishment punishment = iterator.next();
-            if (punishment.getUuid().equals(uuid) || punishment.getUuid().equals(ip)) {
+            if (matches(punishment.getUuid(), uuid) || matches(punishment.getUuid(), ip)) {
                 iterator.remove();
             }
         }
@@ -104,8 +160,42 @@ public class PunishmentManager {
         iterator = history.iterator();
         while (iterator.hasNext()) {
             Punishment punishment = iterator.next();
-            if (punishment.getUuid().equals(uuid) || punishment.getUuid().equals(ip)) {
+            if (matches(punishment.getUuid(), uuid) || matches(punishment.getUuid(), ip)) {
                 iterator.remove();
+            }
+        }
+    }
+
+    /** Replaces a cached target only after a fresh database load succeeds. */
+    public boolean reload(String name, String uuid, String ip) {
+        synchronized (cacheRefreshLock) {
+            InterimData refreshed = load(name, uuid, ip);
+            if (refreshed == null) {
+                return false;
+            }
+            invalidateLocked(name, uuid, ip);
+            refreshed.accept();
+            return true;
+        }
+    }
+
+    private static boolean matches(String actual, String expected) {
+        return expected != null && expected.equals(actual);
+    }
+
+    /** Removes every active cache instance for one persisted punishment row. */
+    public void removeLoadedPunishment(int id) {
+        synchronized (cacheRefreshLock) {
+            punishments.removeIf(punishment -> punishment.getId() == id);
+        }
+    }
+
+    /** Adds a persisted punishment to the local caches without racing a refresh. */
+    public void addLoadedPunishment(Punishment punishment, boolean current) {
+        synchronized (cacheRefreshLock) {
+            history.add(punishment);
+            if (current) {
+                punishments.add(punishment);
             }
         }
     }
@@ -129,17 +219,23 @@ public class PunishmentManager {
                     if (!current || !pt.isExpired()) {
                         ptList.add(pt);
                     } else {
-                        pt.delete(null, false, false);
-                        iterator.remove();
+                        if (pt.deleteChecked(null, false, false)) {
+                            iterator.remove();
+                        }
                     }
                 }
             }
         } else {
             try (ResultSet rs = DatabaseManager.get().executeResultStatement(current ? SQLQuery.SELECT_USER_PUNISHMENTS : SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY, target)) {
+                if (rs == null) {
+                    return ptList;
+                }
                 while (rs.next()) {
                     Punishment punishment = getPunishmentFromResultSet(rs);
                     if ((put == null || put == punishment.getType().getBasic()) && (!current || !punishment.isExpired())) {
                         ptList.add(punishment);
+                    } else if (current && punishment.isExpired()) {
+                        punishment.deleteChecked(null, false, false);
                     }
                 }
             } catch (SQLException ex) {
@@ -163,6 +259,9 @@ public class PunishmentManager {
         List<Punishment> ptList = new ArrayList<>();
 
         ResultSet rs = DatabaseManager.get().executeResultStatement(sqlQuery, parameters);
+        if (rs == null) {
+            return ptList;
+        }
         try {
             while (rs.next()) {
                 Punishment punishment = getPunishmentFromResultSet(rs);
@@ -188,11 +287,20 @@ public class PunishmentManager {
         final Optional<Punishment> cachedPunishment = getLoadedPunishments(false).stream()
                 .filter(punishment -> punishment.getId() == id).findAny();
 
-        if (cachedPunishment.isPresent())
-            return cachedPunishment.get();
+        if (cachedPunishment.isPresent()) {
+            Punishment punishment = cachedPunishment.get();
+            if (!punishment.isExpired()) {
+                return punishment;
+            }
+            punishment.deleteChecked(null, false, true);
+            return null;
+        }
 
 
         try (ResultSet rs = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_PUNISHMENT_BY_ID, id)) {
+            if (rs == null) {
+                return null;
+            }
             if (rs.next()) {
                 final Punishment punishment = getPunishmentFromResultSet(rs);
                 if (!punishment.isExpired())
@@ -316,8 +424,12 @@ public class PunishmentManager {
      */
     public void setCached(InterimData data) {
         cached.add(data.getName());
-        cached.add(data.getIp());
-        cached.add(data.getUuid());
+        if (data.getIp() != null) {
+            cached.add(data.getIp());
+        }
+        if (data.getUuid() != null) {
+            cached.add(data.getUuid());
+        }
     }
 
     /**
@@ -335,7 +447,9 @@ public class PunishmentManager {
 
         int i = 0;
         try (ResultSet resultSet = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY_BY_CALCULATION, uuid, layout)) {
-
+            if (resultSet == null) {
+                return 0;
+            }
             while (resultSet.next()) {
                 i++;
             }
@@ -386,6 +500,63 @@ public class PunishmentManager {
             }
         }
         return punishments;
+    }
+
+    /** Removes cached punishments after their configured end time. */
+    public void cleanupExpired() {
+        for (Punishment punishment : new ArrayList<>(punishments)) {
+            if (punishment.isExpired()) {
+                punishment.deleteChecked(null, false, true);
+            }
+        }
+    }
+
+    /**
+     * Refreshes online-player caches from shared MySQL. This is disabled by
+     * default and is intended for mixed or multi-proxy networks without a
+     * common pub/sub transport.
+     */
+    public void refreshOnlinePlayers() {
+        if (!refreshingOnlinePlayers.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            for (Object player : universal().getMethods().getOnlinePlayers()) {
+                try {
+                    String name = universal().getMethods().getName(player);
+                    if (name == null) {
+                        continue;
+                    }
+                    String uuid = UUIDManager.get().getUUID(name.toLowerCase());
+                    if (uuid == null) {
+                        continue;
+                    }
+                    String ip = universal().getMethods().getIP(player);
+                    Punishment ban;
+                    synchronized (cacheRefreshLock) {
+                        Set<Punishment> refreshed = loadCurrent(uuid, ip);
+                        if (refreshed == null) {
+                            continue;
+                        }
+                        punishments.removeIf(punishment -> matches(punishment.getUuid(), uuid)
+                                || matches(punishment.getUuid(), ip));
+                        punishments.addAll(refreshed);
+                        ban = refreshed.stream()
+                                .filter(punishment -> punishment.getType().getBasic() == PunishmentType.BAN
+                                        && !punishment.isExpired())
+                                .findFirst().orElse(null);
+                    }
+                    if (ban != null) {
+                        universal().getMethods().kickPlayer(name, ban.getLayoutBSN());
+                    }
+                } catch (RuntimeException exception) {
+                    universal().log("Failed to refresh an online punishment cache.");
+                    universal().debugException(exception);
+                }
+            }
+        } finally {
+            refreshingOnlinePlayers.set(false);
+        }
     }
 
     /**

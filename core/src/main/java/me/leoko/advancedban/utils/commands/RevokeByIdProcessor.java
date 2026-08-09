@@ -20,7 +20,13 @@ public class RevokeByIdProcessor implements Consumer<Command.CommandInput> {
 
     @Override
     public void accept(Command.CommandInput input) {
-        int id = Integer.parseInt(input.getPrimary());
+        final int id;
+        try {
+            id = Integer.parseInt(input.getPrimary());
+        } catch (NumberFormatException ignored) {
+            MessageManager.sendMessage(input.getSender(), path + ".Usage", true);
+            return;
+        }
 
         Punishment punishment = resolver.apply(id);
         if (punishment == null) {
@@ -30,7 +36,9 @@ public class RevokeByIdProcessor implements Consumer<Command.CommandInput> {
         }
 
         final String operator = Universal.get().getMethods().getName(input.getSender());
-        punishment.delete(operator, false, true);
+        if (!punishment.deleteChecked(operator, false, true)) {
+            return;
+        }
         MessageManager.sendMessage(input.getSender(), path + ".Done",
                 true, "ID", id + "");
     }

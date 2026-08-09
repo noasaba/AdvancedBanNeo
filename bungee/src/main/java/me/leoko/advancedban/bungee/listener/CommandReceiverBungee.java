@@ -12,17 +12,27 @@ import net.md_5.bungee.api.plugin.Command;
 public class CommandReceiverBungee extends Command {
 
     /**
+     * Creates a command whose permission is checked by AdvancedBan itself.
+     *
+     * @param name name of the command
+     */
+    public CommandReceiverBungee(String name) {
+        super(name);
+    }
+
+    /**
      * @param name       name of the command
-     * @param permission permission required to use the command. May be null
+     * @param permission permission checked by AdvancedBan's command manager
      */
     public CommandReceiverBungee(String name, String permission) {
-        super(name, permission);
+        this(name);
     }
     
     @Override
 	public void execute(final CommandSender sender, final String[] args) {
     	if (args.length > 0) {
-    		args[0] = (BungeeMain.get().getProxy().getPlayer(args[0]) != null ? BungeeMain.get().getProxy().getPlayer(args[0]).getName() : args[0]);
+			net.md_5.bungee.api.connection.ProxiedPlayer target = BungeeMain.get().getProxy().getPlayer(args[0]);
+			args[0] = target == null ? args[0] : target.getName();
     	}
         CommandManager.get().onCommand(sender, this.getName(), args);
     }

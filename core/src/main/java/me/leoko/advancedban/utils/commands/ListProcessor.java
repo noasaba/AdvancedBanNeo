@@ -8,6 +8,7 @@ import me.leoko.advancedban.utils.Punishment;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -51,15 +52,24 @@ public class ListProcessor implements Consumer<Command.CommandInput> {
             return;
         }
 
-        punishments
-                .stream()
-                .filter(punishment -> punishment.isExpired() && !history)
-                .forEach(punishment -> {
+        if (!history) {
+            Iterator<Punishment> iterator = punishments.iterator();
+            while (iterator.hasNext()) {
+                Punishment punishment = iterator.next();
+                if (punishment.isExpired()) {
                     punishment.delete();
-                    punishments.remove(punishment);
-                });
+                    iterator.remove();
+                }
+            }
+        }
 
-        int page = input.hasNext() ? Integer.parseInt(input.getPrimary()) : 1;
+        final int page;
+        try {
+            page = input.hasNext() ? Integer.parseInt(input.getPrimary()) : 1;
+        } catch (NumberFormatException ignored) {
+            MessageManager.sendMessage(input.getSender(), config + ".Usage", true);
+            return;
+        }
         if (punishments.size() / 5.0 + 1 <= page) {
             MessageManager.sendMessage(input.getSender(), config + ".OutOfIndex",
                     true, "PAGE", page + "");
