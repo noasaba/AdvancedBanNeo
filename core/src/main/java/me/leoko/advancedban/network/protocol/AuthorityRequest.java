@@ -8,7 +8,7 @@ import java.util.UUID;
 
 /** Idempotency-keyed request sent by an Agent to the sole Authority. */
 public final class AuthorityRequest {
-    public enum Action { COMMAND, CREATE, DELETE, UPDATE_REASON, DELETE_ALL }
+    public enum Action { COMMAND, CREATE, DELETE, UPDATE_REASON, DELETE_ALL, TAB_COMPLETE }
     public enum SenderKind { PLAYER, CONSOLE, API }
 
     private final UUID requestId;

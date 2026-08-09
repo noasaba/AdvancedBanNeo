@@ -16,13 +16,66 @@ import java.util.UUID;
 public final class HandshakeProtocol {
     private static final int CLIENT_MAGIC = 0x41424E48; // ABNH
     private static final int SERVER_MAGIC = 0x41424E41; // ABNA
+    private static final int CHALLENGE_MAGIC = 0x41424E43; // ABNC
     private static final int NONCE_BYTES = 32;
     private static final SecureRandom RANDOM = new SecureRandom();
+
+    /**
+     * Creates the server-first, single-connection challenge used by the production transport.
+     * The challenge is intentionally not authenticated on its own: it is included in both
+     * authenticated hello MACs, so an intermediary can only cause the handshake to fail.
+     */
+    public ServerChallenge createServerChallenge(String authorityNode, long issuedAtMillis) {
+        return new ServerChallenge(ProtocolConstants.PROTOCOL_VERSION, authorityNode,
+                issuedAtMillis, randomNonce());
+    }
+
+    public byte[] encode(ServerChallenge challenge) {
+        return encodeChallenge(challenge.protocolVersion, challenge.authorityNode,
+                challenge.issuedAtMillis, challenge.nonce);
+    }
+
+    public ServerChallenge decodeServerChallenge(byte[] encoded, long nowMillis,
+                                                  long permittedClockSkewMillis)
+            throws ProtocolException, AuthenticationException {
+        try {
+            DataInputStream in = input(encoded);
+            if (in.readInt() != CHALLENGE_MAGIC) {
+                throw new ProtocolException("invalid server challenge magic");
+            }
+            int version = in.readInt();
+            if (version != ProtocolConstants.PROTOCOL_VERSION) {
+                throw new AuthenticationException(AuthenticationException.Reason.INCOMPATIBLE_PROTOCOL);
+            }
+            long issuedAtMillis = in.readLong();
+            String authorityNode = readString(in);
+            byte[] nonce = readFixed(in, NONCE_BYTES);
+            requireEnd(in);
+            requireFresh(issuedAtMillis, nowMillis, permittedClockSkewMillis);
+            return new ServerChallenge(version, authorityNode, issuedAtMillis, nonce);
+        } catch (AuthenticationException exception) {
+            throw exception;
+        } catch (EOFException exception) {
+            throw new ProtocolException("truncated server challenge", exception);
+        } catch (IOException | IllegalArgumentException exception) {
+            throw new ProtocolException("invalid server challenge", exception);
+        }
+    }
 
     public ClientHello createClientHello(String nodeId, long timestampMillis, byte[] credential) {
         byte[] nonce = randomNonce();
         byte[] unsigned = encodeClientUnsigned(nodeId, timestampMillis, nonce);
         return new ClientHello(nodeId, timestampMillis, nonce, HmacSha256.sign(credential, unsigned));
+    }
+
+    /** Creates a client hello cryptographically bound to the current server challenge. */
+    public ClientHello createClientHello(String nodeId, long timestampMillis,
+                                         ServerChallenge challenge, byte[] credential) {
+        Objects.requireNonNull(challenge, "challenge");
+        byte[] nonce = randomNonce();
+        byte[] unsigned = encodeClientUnsigned(nodeId, timestampMillis, nonce);
+        return new ClientHello(nodeId, timestampMillis, nonce,
+                HmacSha256.sign(credential, appendContext(unsigned, encode(challenge))));
     }
 
     public ClientHello decodeAndVerifyClient(byte[] encoded, byte[] credential)
@@ -44,6 +97,22 @@ public final class HandshakeProtocol {
         return hello;
     }
 
+    /** Verifies a client hello against the unique challenge issued on this socket. */
+    public ClientHello decodeAndVerifyClient(byte[] encoded, byte[] credential,
+                                             ServerChallenge challenge, long nowMillis,
+                                             long permittedClockSkewMillis)
+            throws ProtocolException, AuthenticationException {
+        Objects.requireNonNull(challenge, "challenge");
+        ClientHello hello = decodeClient(encoded);
+        if (!HmacSha256.verify(credential,
+                appendContext(encodeClientUnsigned(hello.nodeId, hello.timestampMillis, hello.nonce),
+                        encode(challenge)), hello.tag)) {
+            throw new AuthenticationException(AuthenticationException.Reason.BAD_SIGNATURE);
+        }
+        requireFresh(hello.timestampMillis, nowMillis, permittedClockSkewMillis);
+        return hello;
+    }
+
     public ServerHello createServerHello(ClientHello client, String authorityNode, long issuedAtMillis,
                                          long expiresAtMillis, byte[] credential) {
         if (expiresAtMillis <= issuedAtMillis) {
@@ -56,6 +125,23 @@ public final class HandshakeProtocol {
         return new ServerHello(true, ProtocolConstants.PROTOCOL_VERSION, sessionId, authorityNode,
                 issuedAtMillis, expiresAtMillis, authorityNonce,
                 HmacSha256.sign(credential, unsigned));
+    }
+
+    /** Creates a server response bound to the complete server-first handshake transcript. */
+    public ServerHello createServerHello(ClientHello client, ServerChallenge challenge,
+                                         long issuedAtMillis, long expiresAtMillis,
+                                         byte[] credential) {
+        Objects.requireNonNull(challenge, "challenge");
+        if (expiresAtMillis <= issuedAtMillis) {
+            throw new IllegalArgumentException("session expiry must be after issue time");
+        }
+        UUID sessionId = UUID.randomUUID();
+        byte[] authorityNonce = randomNonce();
+        byte[] unsigned = encodeServerAuthenticationInput(true, ProtocolConstants.PROTOCOL_VERSION, sessionId,
+                challenge.authorityNode, issuedAtMillis, expiresAtMillis, authorityNonce, client.nonce);
+        return new ServerHello(true, ProtocolConstants.PROTOCOL_VERSION, sessionId, challenge.authorityNode,
+                issuedAtMillis, expiresAtMillis, authorityNonce,
+                HmacSha256.sign(credential, appendContext(unsigned, encode(challenge))));
     }
 
     public ServerHello decodeAndVerifyServer(byte[] encoded, byte[] clientNonce, byte[] credential)
@@ -81,6 +167,35 @@ public final class HandshakeProtocol {
                                              long nowMillis, long permittedClockSkewMillis)
             throws ProtocolException, AuthenticationException {
         ServerHello hello = decodeAndVerifyServer(encoded, clientNonce, credential);
+        requireFresh(hello.issuedAtMillis, nowMillis, permittedClockSkewMillis);
+        if (hello.expiresAtMillis <= hello.issuedAtMillis || hello.expiresAtMillis <= nowMillis) {
+            throw new AuthenticationException(AuthenticationException.Reason.SESSION_EXPIRED);
+        }
+        return hello;
+    }
+
+    /** Verifies the response and its binding to the server challenge seen by this client. */
+    public ServerHello decodeAndVerifyServer(byte[] encoded, byte[] clientNonce,
+                                             ServerChallenge challenge, byte[] credential,
+                                             long nowMillis, long permittedClockSkewMillis)
+            throws ProtocolException, AuthenticationException {
+        Objects.requireNonNull(challenge, "challenge");
+        ServerHello hello = decodeServer(encoded);
+        if (!hello.accepted) {
+            throw new AuthenticationException(AuthenticationException.Reason.BAD_SIGNATURE);
+        }
+        byte[] unsigned = encodeServerAuthenticationInput(hello.accepted, hello.protocolVersion, hello.sessionId,
+                hello.authorityNode, hello.issuedAtMillis, hello.expiresAtMillis,
+                hello.authorityNonce, clientNonce);
+        if (!HmacSha256.verify(credential, appendContext(unsigned, encode(challenge)), hello.tag)) {
+            throw new AuthenticationException(AuthenticationException.Reason.BAD_SIGNATURE);
+        }
+        if (hello.protocolVersion != ProtocolConstants.PROTOCOL_VERSION) {
+            throw new AuthenticationException(AuthenticationException.Reason.INCOMPATIBLE_PROTOCOL);
+        }
+        if (!challenge.authorityNode.equals(hello.authorityNode)) {
+            throw new AuthenticationException(AuthenticationException.Reason.SOURCE_MISMATCH);
+        }
         requireFresh(hello.issuedAtMillis, nowMillis, permittedClockSkewMillis);
         if (hello.expiresAtMillis <= hello.issuedAtMillis || hello.expiresAtMillis <= nowMillis) {
             throw new AuthenticationException(AuthenticationException.Reason.SESSION_EXPIRED);
@@ -207,6 +322,28 @@ public final class HandshakeProtocol {
         return result;
     }
 
+    private static byte[] appendContext(byte[] message, byte[] context) {
+        byte[] result = Arrays.copyOf(message, message.length + context.length);
+        System.arraycopy(context, 0, result, message.length, context.length);
+        return result;
+    }
+
+    private byte[] encodeChallenge(int version, String authorityNode, long issuedAtMillis, byte[] nonce) {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(bytes);
+            out.writeInt(CHALLENGE_MAGIC);
+            out.writeInt(version);
+            out.writeLong(issuedAtMillis);
+            writeString(out, authorityNode);
+            writeFixed(out, nonce, NONCE_BYTES, "server challenge nonce");
+            out.flush();
+            return bytes.toByteArray();
+        } catch (IOException impossible) {
+            throw new IllegalStateException("in-memory challenge encoding failed", impossible);
+        }
+    }
+
     private static DataInputStream input(byte[] encoded) throws ProtocolException {
         if (encoded == null || encoded.length == 0 || encoded.length > 4096) {
             throw new ProtocolException("invalid handshake size");
@@ -286,6 +423,24 @@ public final class HandshakeProtocol {
 
         public String getNodeId() { return nodeId; }
         public long getTimestampMillis() { return timestampMillis; }
+        public byte[] getNonce() { return nonce.clone(); }
+    }
+
+    public static final class ServerChallenge {
+        private final int protocolVersion;
+        private final String authorityNode;
+        private final long issuedAtMillis;
+        private final byte[] nonce;
+
+        private ServerChallenge(int protocolVersion, String authorityNode, long issuedAtMillis, byte[] nonce) {
+            this.protocolVersion = protocolVersion;
+            this.authorityNode = authorityNode;
+            this.issuedAtMillis = issuedAtMillis;
+            this.nonce = nonce.clone();
+        }
+
+        public String getAuthorityNode() { return authorityNode; }
+        public long getIssuedAtMillis() { return issuedAtMillis; }
         public byte[] getNonce() { return nonce.clone(); }
     }
 

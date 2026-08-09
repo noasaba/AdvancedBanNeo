@@ -11,6 +11,7 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.velocity.listener.ConnectionListenerVelocity;
+import me.leoko.advancedban.velocity.listener.AgentBackendRoutingListener;
 import me.leoko.advancedban.velocity.listener.PlayerInputListenerVelocity;
 import me.leoko.advancedban.velocity.network.VelocityCoordinatorServer;
 import me.leoko.advancedban.velocity.network.VelocityNetworkSettings;
@@ -50,6 +51,7 @@ public final class VelocityMain {
             }
             proxy.getEventManager().register(this, new ConnectionListenerVelocity());
             proxy.getEventManager().register(this, new PlayerInputListenerVelocity());
+            proxy.getEventManager().register(this, new AgentBackendRoutingListener(coordinator));
             initialized = true;
         } catch (RuntimeException | Error exception) {
             if (coordinator != null) {

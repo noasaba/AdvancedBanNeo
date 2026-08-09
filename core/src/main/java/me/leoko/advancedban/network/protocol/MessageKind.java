@@ -9,7 +9,13 @@ public enum MessageKind {
     HEARTBEAT(5),
     ACK(6),
     MUTATION_REQUEST(7),
-    MUTATION_RESULT(8);
+    MUTATION_RESULT(8),
+    HISTORY_SNAPSHOT_BEGIN(9),
+    HISTORY_SNAPSHOT_CHUNK(10),
+    HISTORY_SNAPSHOT_END(11),
+    HISTORY_APPEND(12),
+    /** Agent confirms that both bootstrap snapshots are installed. */
+    READY(13);
 
     private final int wireId;
 

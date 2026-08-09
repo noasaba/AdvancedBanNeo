@@ -78,9 +78,14 @@ public class Universal {
         if (runtimeRole.isAuthority()) {
             try {
                 DatabaseManager.get().setup(mi.getBoolean(mi.getConfig(), "UseMySQL", false));
+                verifyAuthorityStorage(runtimeRole, DatabaseManager.get().isConnectionValid());
             } catch (Exception ex) {
                 log("Failed enabling database-manager...");
                 debugException(ex);
+                if (runtimeRole == RuntimeRole.COORDINATOR_AUTHORITY) {
+                    throw new IllegalStateException(
+                            "Velocity Authority cannot start without punishment storage", ex);
+                }
             }
         }
 
@@ -349,7 +354,7 @@ public class Universal {
         InterimData interimData = PunishmentManager.get().load(name, uuid, ip);
 
         if (interimData == null) {
-            if (getMethods().getBoolean(mi.getConfig(), "LockdownOnError", true)) {
+            if (mustLockdownOnStorageFailure()) {
                 return "[AdvancedBan] Failed to load player data!";
             } else {
                 return null;
@@ -366,6 +371,19 @@ public class Universal {
         }
 
         return pt.getLayoutBSN();
+    }
+
+    private boolean mustLockdownOnStorageFailure() {
+        // A coordinator is the sole network authority; allowing login after a
+        // failed DB read would make every backend snapshot silently fail open.
+        return runtimeRole == RuntimeRole.COORDINATOR_AUTHORITY
+                || getMethods().getBoolean(mi.getConfig(), "LockdownOnError", true);
+    }
+
+    static void verifyAuthorityStorage(RuntimeRole role, boolean connectionValid) {
+        if (role == RuntimeRole.COORDINATOR_AUTHORITY && !connectionValid) {
+            throw new IllegalStateException("Coordinator Authority storage is unavailable");
+        }
     }
 
     /**

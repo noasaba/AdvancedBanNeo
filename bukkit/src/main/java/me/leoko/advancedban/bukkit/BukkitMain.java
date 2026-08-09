@@ -8,6 +8,7 @@ import me.leoko.advancedban.bukkit.listener.ConnectionListener;
 import me.leoko.advancedban.bukkit.listener.InternalListener;
 import me.leoko.advancedban.bukkit.network.PaperAgentClient;
 import me.leoko.advancedban.bukkit.network.PaperNetworkSettings;
+import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.runtime.RuntimeRole;
 import org.bukkit.Bukkit;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
@@ -17,6 +18,7 @@ public class BukkitMain extends JavaPlugin {
     private static BukkitMain instance;
     private ChatSyncerIntegration chatSyncerIntegration;
     private PaperAgentClient agentClient;
+    private boolean universalInitialized;
 
     public static BukkitMain get() {
         return instance;
@@ -29,10 +31,23 @@ public class BukkitMain extends JavaPlugin {
     @Override
     public void onEnable() {
         instance = this;
+        try {
+            enablePlugin();
+        } catch (RuntimeException | Error exception) {
+            closeRuntime();
+            if (DatabaseManager.get().isConnectionValid()) {
+                DatabaseManager.get().shutdown();
+            }
+            throw exception;
+        }
+    }
+
+    private void enablePlugin() {
         PaperNetworkSettings network = PaperNetworkSettings.load(this);
         BukkitMethods methods = new BukkitMethods(network.isAgent()
                 ? RuntimeRole.AGENT_DEGRADED : RuntimeRole.STANDALONE_AUTHORITY);
         Universal.get().setup(methods);
+        universalInitialized = true;
         if (network.isAgent()) {
             if (!network.isValidAgent()) {
                 Universal.get().log("Paper is configured as an Agent but cannot authenticate: " + network.getError());
@@ -64,6 +79,10 @@ public class BukkitMain extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        closeRuntime();
+    }
+
+    private void closeRuntime() {
         if (agentClient != null) {
             agentClient.close();
             agentClient = null;
@@ -72,6 +91,9 @@ public class BukkitMain extends JavaPlugin {
             chatSyncerIntegration.close();
             chatSyncerIntegration = null;
         }
-        Universal.get().shutdown();
+        if (universalInitialized) {
+            Universal.get().shutdown();
+            universalInitialized = false;
+        }
     }
 }

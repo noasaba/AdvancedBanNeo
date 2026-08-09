@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * The Method Interface is used to define universal actions which are dependent on the server software used.
@@ -29,6 +30,14 @@ public interface MethodInterface {
     /** Sends an Agent operation to its Authority. Legacy adapters fail closed. */
     default boolean submitAuthorityRequest(AuthorityRequest request) {
         return false;
+    }
+
+    /**
+     * Non-blocking Agent operation. Platform adapters may override this to
+     * safely support API calls made from their event/main thread.
+     */
+    default CompletableFuture<Boolean> submitAuthorityRequestAsync(AuthorityRequest request) {
+        return CompletableFuture.completedFuture(submitAuthorityRequest(request));
     }
 
     /** Delegates a complete built-in command before local processing. */

@@ -158,4 +158,8 @@ public final class VelocityNetworkSettings {
         credentials.forEach((node, key) -> copy.put(node, key.clone()));
         return copy;
     }
+
+    public boolean isAllowedNode(String nodeId) {
+        return nodeId != null && credentials.containsKey(nodeId);
+    }
 }

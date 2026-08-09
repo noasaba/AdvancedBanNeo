@@ -16,6 +16,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Arrays;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Created by Leoko @ dev.skamps.eu on 30.05.2016.
@@ -51,7 +52,23 @@ public class Punishment {
 
     public static void create(String name, String target, String reason, String operator, PunishmentType type, Long end,
                               String calculation, boolean silent) {
-        createChecked(name, target, reason, operator, type, end, calculation, silent);
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            createCheckedAsync(name, target, reason, operator, type, end, calculation, silent);
+        } else {
+            createChecked(name, target, reason, operator, type, end, calculation, silent);
+        }
+    }
+
+    /** Non-blocking Agent-safe variant of the legacy public creation API. */
+    public static CompletableFuture<Boolean> createCheckedAsync(
+            String name, String target, String reason, String operator, PunishmentType type,
+            Long end, String calculation, boolean silent) {
+        Punishment punishment = new Punishment(name, target, reason, operator,
+                end == -1 ? type.getPermanent() : type, TimeManager.getTime(), end, calculation, -1);
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            return punishment.submitCreateAsync(silent);
+        }
+        return CompletableFuture.completedFuture(punishment.createChecked(silent));
     }
 
     public static boolean createChecked(String name, String target, String reason, String operator, PunishmentType type,
@@ -90,7 +107,18 @@ public class Punishment {
     }
 
     public void create(boolean silent) {
-        createChecked(silent);
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            createCheckedAsync(silent);
+        } else {
+            createChecked(silent);
+        }
+    }
+
+    /** Non-blocking Agent-safe creation for an existing punishment object. */
+    public CompletableFuture<Boolean> createCheckedAsync(boolean silent) {
+        return Universal.get().getRuntimeRole().isAgent()
+                ? submitCreateAsync(silent)
+                : CompletableFuture.completedFuture(createChecked(silent));
     }
 
     public boolean createChecked(boolean silent) {
@@ -215,13 +243,35 @@ public class Punishment {
     }
 
     public void updateReason(String reason) {
-        updateReasonChecked(reason);
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            updateReasonCheckedAsync(reason);
+        } else {
+            updateReasonChecked(reason);
+        }
+    }
+
+    /** Non-blocking Agent-safe reason update. */
+    public CompletableFuture<Boolean> updateReasonCheckedAsync(String reason) {
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            return mi.submitAuthorityRequestAsync(apiRequest(AuthorityRequest.Action.UPDATE_REASON,
+                    Arrays.asList(String.valueOf(id), reason))).thenApply(updated -> {
+                        if (updated) {
+                            this.reason = reason;
+                        }
+                        return updated;
+                    });
+        }
+        return CompletableFuture.completedFuture(updateReasonChecked(reason));
     }
 
     public boolean updateReasonChecked(String reason) {
         if (Universal.get().getRuntimeRole().isAgent()) {
-            return mi.submitAuthorityRequest(apiRequest(AuthorityRequest.Action.UPDATE_REASON,
+            boolean updated = mi.submitAuthorityRequest(apiRequest(AuthorityRequest.Action.UPDATE_REASON,
                     Arrays.asList(String.valueOf(id), reason)));
+            if (updated) {
+                this.reason = reason;
+            }
+            return updated;
         }
         if (id == -1 || !DatabaseManager.get().executeStatementChecked(SQLQuery.UPDATE_PUNISHMENT_REASON, reason, id)) {
             return false;
@@ -253,7 +303,21 @@ public class Punishment {
     }
 
     public void delete(String who, boolean massClear, boolean removeCache) {
-        deleteChecked(who, massClear, removeCache);
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            deleteCheckedAsync(who, massClear, removeCache);
+        } else {
+            deleteChecked(who, massClear, removeCache);
+        }
+    }
+
+    /** Non-blocking Agent-safe deletion. */
+    public CompletableFuture<Boolean> deleteCheckedAsync(String who, boolean massClear, boolean removeCache) {
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            return mi.submitAuthorityRequestAsync(apiRequest(AuthorityRequest.Action.DELETE, Arrays.asList(
+                    String.valueOf(id), who == null ? "" : who,
+                    String.valueOf(massClear), String.valueOf(removeCache))));
+        }
+        return CompletableFuture.completedFuture(deleteChecked(who, massClear, removeCache));
     }
 
     public boolean deleteChecked(String who, boolean massClear, boolean removeCache) {
@@ -325,6 +389,30 @@ public class Punishment {
         return true;
     }
 
+    /** Non-blocking Agent-safe bulk deletion. */
+    public static CompletableFuture<Boolean> deleteAllCheckedAsync(List<Punishment> punishments, String who,
+                                                                    boolean massClear, boolean removeCache) {
+        if (!Universal.get().getRuntimeRole().isAgent()) {
+            return CompletableFuture.completedFuture(
+                    deleteAllChecked(punishments, who, massClear, removeCache));
+        }
+        if (punishments == null || punishments.isEmpty()) {
+            return CompletableFuture.completedFuture(false);
+        }
+        List<String> encodedIds = new ArrayList<>(punishments.size() + 2);
+        encodedIds.add(String.valueOf(massClear));
+        encodedIds.add(String.valueOf(removeCache));
+        for (Punishment punishment : punishments) {
+            if (punishment == null || punishment.getType() == PunishmentType.KICK || punishment.getId() == -1) {
+                return CompletableFuture.completedFuture(false);
+            }
+            encodedIds.add(String.valueOf(punishment.getId()));
+        }
+        return Universal.get().getMethods().submitAuthorityRequestAsync(new AuthorityRequest(
+                UUID.randomUUID(), AuthorityRequest.Action.DELETE_ALL,
+                AuthorityRequest.SenderKind.API, "", who == null ? "" : who, encodedIds));
+    }
+
     private void completeDeletion(String who, boolean massClear, boolean removeCache) {
         completeDeletion(who, massClear, removeCache, true);
     }
@@ -362,6 +450,13 @@ public class Punishment {
 
     private boolean submitCreate(boolean requestedSilent) {
         return mi.submitAuthorityRequest(apiRequest(AuthorityRequest.Action.CREATE, Arrays.asList(
+                getName(), getUuid(), reason == null ? "" : reason, getOperator(), getType().name(),
+                String.valueOf(getEnd()), getCalculation() == null ? "" : getCalculation(),
+                String.valueOf(requestedSilent))));
+    }
+
+    private CompletableFuture<Boolean> submitCreateAsync(boolean requestedSilent) {
+        return mi.submitAuthorityRequestAsync(apiRequest(AuthorityRequest.Action.CREATE, Arrays.asList(
                 getName(), getUuid(), reason == null ? "" : reason, getOperator(), getType().name(),
                 String.valueOf(getEnd()), getCalculation() == null ? "" : getCalculation(),
                 String.valueOf(requestedSilent))));

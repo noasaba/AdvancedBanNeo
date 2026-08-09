@@ -3,10 +3,13 @@ package me.leoko.advancedban.velocity.network;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.manager.CommandManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.network.protocol.AuthenticationException;
+import me.leoko.advancedban.network.protocol.AuthenticatedLiveness;
 import me.leoko.advancedban.network.protocol.AuthorityRequest;
 import me.leoko.advancedban.network.protocol.AuthorityRequestCodec;
 import me.leoko.advancedban.network.protocol.HandshakeProtocol;
@@ -24,6 +27,7 @@ import me.leoko.advancedban.network.state.RuntimePunishmentMapper;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.PunishmentType;
 import me.leoko.advancedban.utils.SQLQuery;
+import me.leoko.advancedban.utils.Command;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -35,6 +39,8 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -52,12 +58,14 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Player-independent authenticated TCP coordinator hosted by Velocity. */
 public final class VelocityCoordinatorServer implements AutoCloseable {
     private static final long SESSION_MILLIS = 12L * 60L * 60L * 1000L;
     private static final int SOCKET_TIMEOUT_MILLIS = 45_000;
+    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacySection();
 
     private final ProxyServer proxy;
     private final VelocityNetworkSettings settings;
@@ -77,6 +85,7 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
     private final DaemonFactory threadFactory = new DaemonFactory();
     private final AtomicBoolean running = new AtomicBoolean();
     private volatile Map<Long, RuntimePunishment> current = Collections.emptyMap();
+    private volatile Map<Long, RuntimePunishment> history = Collections.emptyMap();
     private volatile ServerSocket serverSocket;
     private volatile Thread acceptThread;
 
@@ -148,9 +157,13 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
         try (Socket closeable = socket;
              DataInputStream input = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
              DataOutputStream output = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()))) {
-            byte[] encodedHello = readFrame(input, 4096);
+            long handshakeDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L);
+            HandshakeProtocol.ServerChallenge challenge = handshake.createServerChallenge(
+                    settings.getAuthorityId(), System.currentTimeMillis());
+            writeFrame(output, handshake.encode(challenge));
+            byte[] encodedHello = readFrameBeforeDeadline(input, socket, 4096, handshakeDeadline);
             long now = System.currentTimeMillis();
-            HandshakeProtocol.ClientHello hello = authenticateHello(encodedHello, now);
+            HandshakeProtocol.ClientHello hello = authenticateHello(encodedHello, challenge, now);
             byte[] credential = settings.getCredentials().get(hello.getNodeId());
             if (!helloReplay.accept(hello.getNodeId(), hello.getNonce(), now,
                     ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS * 2L)) {
@@ -158,7 +171,7 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
             }
 
             HandshakeProtocol.ServerHello response = handshake.createServerHello(
-                    hello, settings.getAuthorityId(), now, now + SESSION_MILLIS, credential);
+                    hello, challenge, now, now + SESSION_MILLIS, credential);
             writeFrame(output, handshake.encode(response, hello.getNonce()));
             byte[] sessionKey = SessionKeyDerivation.derive(credential, response.getSessionId(),
                     hello.getNodeId(), settings.getAuthorityId(), hello.getNonce(), response.getAuthorityNonce());
@@ -175,21 +188,25 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
                 }
                 connection.send(MessageKind.SNAPSHOT,
                         punishmentCodec.encodeSnapshot(new ArrayList<>(current.values())));
+                sendHistorySnapshot(connection, new ArrayList<>(history.values()));
             }
 
-            boolean heartbeatOutstanding = false;
+            AuthenticatedLiveness liveness = new AuthenticatedLiveness(
+                    monotonicMillis(), SOCKET_TIMEOUT_MILLIS, SOCKET_TIMEOUT_MILLIS);
             while (running.get() && session.isActive(System.currentTimeMillis())) {
                 try {
                     byte[] frame = readFrame(input, ProtocolConstants.MAX_PACKET_BYTES);
                     ProtocolPacket packet = session.open(protocolCodec.decode(frame), System.currentTimeMillis());
-                    heartbeatOutstanding = false;
+                    liveness.authenticatedInbound(monotonicMillis());
                     handlePacket(connection, packet);
                 } catch (SocketTimeoutException timeout) {
-                    if (heartbeatOutstanding) {
+                    AuthenticatedLiveness.Action action = liveness.onReadTimeout(monotonicMillis());
+                    if (action == AuthenticatedLiveness.Action.CLOSE) {
                         throw new SocketTimeoutException("Agent heartbeat acknowledgement timed out");
                     }
-                    connection.send(MessageKind.HEARTBEAT, new byte[0]);
-                    heartbeatOutstanding = true;
+                    if (action == AuthenticatedLiveness.Action.SEND_HEARTBEAT) {
+                        connection.send(MessageKind.HEARTBEAT, new byte[0]);
+                    }
                 }
             }
         } catch (EOFException ignored) {
@@ -214,13 +231,15 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
         }
     }
 
-    private HandshakeProtocol.ClientHello authenticateHello(byte[] encoded, long nowMillis)
+    private HandshakeProtocol.ClientHello authenticateHello(byte[] encoded,
+                                                            HandshakeProtocol.ServerChallenge challenge,
+                                                            long nowMillis)
             throws ProtocolException, AuthenticationException {
         AuthenticationException failure = null;
         for (Map.Entry<String, byte[]> entry : settings.getCredentials().entrySet()) {
             try {
                 HandshakeProtocol.ClientHello hello = handshake.decodeAndVerifyClient(encoded, entry.getValue(),
-                        nowMillis, ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS);
+                        challenge, nowMillis, ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS);
                 if (!entry.getKey().equals(hello.getNodeId())) {
                     throw new AuthenticationException(AuthenticationException.Reason.SOURCE_MISMATCH);
                 }
@@ -235,6 +254,17 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
 
     private void handlePacket(ClientConnection connection, ProtocolPacket packet)
             throws IOException, ProtocolException {
+        if (packet.getKind() == MessageKind.READY) {
+            // The Agent emits READY only after atomically installing
+            // both the active and complete public history snapshots.
+            connection.snapshotAcknowledged.compareAndSet(false, true);
+            return;
+        }
+        if (packet.getKind() == MessageKind.ACK) {
+            // An ACK is only a heartbeat response and must never promote an
+            // incompletely synchronized backend to routing eligibility.
+            return;
+        }
         if (packet.getKind() == MessageKind.HEARTBEAT) {
             connection.send(MessageKind.ACK, new byte[0]);
             return;
@@ -262,9 +292,19 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
                 if (completed != null) {
                     return completed;
                 }
-                boolean success = execute(request);
+                CommandExecution commandExecution;
+                if (request.getAction() == AuthorityRequest.Action.COMMAND) {
+                    commandExecution = executeCommand(request);
+                } else if (request.getAction() == AuthorityRequest.Action.TAB_COMPLETE) {
+                    commandExecution = executeTabCompletion(request);
+                } else {
+                    commandExecution = null;
+                }
+                boolean success = commandExecution == null ? execute(request) : commandExecution.accepted;
+                String detail = commandExecution == null
+                        ? (success ? "accepted" : "rejected") : commandExecution.detail;
                 completed = requestCodec.decodeResult(requestCodec.encodeResult(
-                        request.getRequestId(), success, success ? "accepted" : "rejected"));
+                        request.getRequestId(), success, detail));
                 completedRequests.put(idempotencyKey, completed);
                 completedRequestOrder.add(idempotencyKey);
                 while (completedRequests.size() > 10_000) {
@@ -286,16 +326,7 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
             List<String> values = request.getValues();
             switch (request.getAction()) {
                 case COMMAND:
-                    if (values.isEmpty()) {
-                        return false;
-                    }
-                    Optional<CommandSource> sender = resolveSender(request);
-                    if (!sender.isPresent()) {
-                        return false;
-                    }
-                    CommandManager.get().onCommand(sender.get(), values.get(0),
-                            values.subList(1, values.size()).toArray(new String[0]));
-                    return true;
+                    return false;
                 case CREATE:
                     if (values.size() != 8) {
                         return false;
@@ -339,6 +370,89 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
         }
     }
 
+    private CommandExecution executeCommand(AuthorityRequest request) {
+        List<String> values = request.getValues();
+        if (values.isEmpty()) {
+            return new CommandExecution(false, "rejected");
+        }
+        Optional<CommandSource> resolved = resolveSender(request);
+        if (!resolved.isPresent()) {
+            return new CommandExecution(false, "rejected");
+        }
+        if (request.getSenderKind() != AuthorityRequest.SenderKind.CONSOLE) {
+            boolean accepted = CommandManager.get().executeNow(resolved.get(), values.get(0),
+                    values.subList(1, values.size()).toArray(new String[0]));
+            return new CommandExecution(accepted, accepted ? "accepted" : "rejected");
+        }
+
+        CommandSource authorityConsole = resolved.get();
+        List<String> output = new ArrayList<>();
+        CommandSource capture = (CommandSource) Proxy.newProxyInstance(
+                CommandSource.class.getClassLoader(), new Class<?>[]{CommandSource.class},
+                (proxyInstance, method, arguments) -> {
+                    if ("sendMessage".equals(method.getName()) && arguments != null
+                            && arguments.length > 0 && arguments[0] instanceof Component) {
+                        output.add(LEGACY.serialize((Component) arguments[0]));
+                        return null;
+                    }
+                    try {
+                        return method.invoke(authorityConsole, arguments);
+                    } catch (InvocationTargetException exception) {
+                        throw exception.getCause();
+                    }
+                });
+        boolean accepted = CommandManager.get().executeNow(capture, values.get(0),
+                values.subList(1, values.size()).toArray(new String[0]));
+        String detail = output.isEmpty() ? (accepted ? "accepted" : "rejected") : String.join("\n", output);
+        // The wire codec limits UTF-8 bytes. Four thousand UTF-16 code units
+        // stay below that bound even for supplementary characters.
+        if (detail.length() > 4_000) {
+            detail = detail.substring(0, 4_000);
+        }
+        return new CommandExecution(accepted, detail);
+    }
+
+    private CommandExecution executeTabCompletion(AuthorityRequest request) {
+        List<String> values = request.getValues();
+        if (values.isEmpty()) {
+            return new CommandExecution(false, "");
+        }
+        Optional<CommandSource> sender = resolveSender(request);
+        Command command = Command.getByName(values.get(0));
+        if (!sender.isPresent() || command == null || command.getTabCompleter() == null) {
+            return new CommandExecution(false, "");
+        }
+        if (command.getPermission() != null && !Universal.get().hasPerms(sender.get(), command.getPermission())) {
+            return new CommandExecution(true, "");
+        }
+        List<String> suggestions = command.getTabCompleter().onTabComplete(sender.get(),
+                values.subList(1, values.size()).toArray(new String[0]));
+        StringBuilder encoded = new StringBuilder();
+        for (String suggestion : suggestions) {
+            if (suggestion == null || suggestion.indexOf('\u001f') >= 0) {
+                continue;
+            }
+            if (encoded.length() + suggestion.length() + 1 > 4_000) {
+                break;
+            }
+            if (encoded.length() > 0) {
+                encoded.append('\u001f');
+            }
+            encoded.append(suggestion);
+        }
+        return new CommandExecution(true, encoded.toString());
+    }
+
+    private static final class CommandExecution {
+        private final boolean accepted;
+        private final String detail;
+
+        private CommandExecution(boolean accepted, String detail) {
+            this.accepted = accepted;
+            this.detail = detail;
+        }
+    }
+
     private Optional<CommandSource> resolveSender(AuthorityRequest request) {
         if (request.getSenderKind() == AuthorityRequest.SenderKind.CONSOLE) {
             return Optional.of(proxy.getConsoleCommandSource());
@@ -362,6 +476,7 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
             return;
         }
         Map<Long, RuntimePunishment> previous = current;
+        Map<Long, RuntimePunishment> previousHistory = history;
         Map<Long, RuntimePunishment> next = refreshSnapshot();
         for (Map.Entry<Long, RuntimePunishment> entry : next.entrySet()) {
             RuntimePunishment old = previous.get(entry.getKey());
@@ -376,6 +491,21 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
                 broadcast(MessageKind.REVOKE, punishmentCodec.encodeRevoke(id));
             }
         }
+        broadcastHistoryChanges(previousHistory, history);
+    }
+
+    /** True only while the configured backend has an authenticated session and ACKed its full active snapshot. */
+    public boolean isAgentReady(String backendServerName) {
+        if (!settings.isEnabled() || backendServerName == null
+                || !settings.isAllowedNode(backendServerName)) {
+            return false;
+        }
+        ClientConnection connection = clients.get(backendServerName);
+        return connection != null && connection.isReady();
+    }
+
+    public boolean isAgentRoutingEnforced() {
+        return settings.isEnabled();
     }
 
     private Map<Long, RuntimePunishment> refreshSnapshot() {
@@ -387,7 +517,68 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
             }
         }
         current = Collections.unmodifiableMap(snapshot);
+        Map<Long, RuntimePunishment> historySnapshot = new LinkedHashMap<>();
+        for (Punishment punishment : PunishmentManager.get().getPunishments(
+                SQLQuery.SELECT_ALL_PUNISHMENTS_HISTORY)) {
+            RuntimePunishment runtime = RuntimePunishmentMapper.fromLegacy(punishment);
+            historySnapshot.put(runtime.getId(), runtime);
+        }
+        history = Collections.unmodifiableMap(historySnapshot);
         return current;
+    }
+
+    private void broadcastHistoryChanges(Map<Long, RuntimePunishment> previous,
+                                         Map<Long, RuntimePunishment> next) {
+        boolean appendOnly = next.size() >= previous.size();
+        if (appendOnly) {
+            for (Map.Entry<Long, RuntimePunishment> entry : previous.entrySet()) {
+                if (!entry.getValue().equals(next.get(entry.getKey()))) {
+                    appendOnly = false;
+                    break;
+                }
+            }
+        }
+        if (!appendOnly) {
+            for (ClientConnection connection : clients.values()) {
+                try {
+                    sendHistorySnapshot(connection, new ArrayList<>(next.values()));
+                } catch (IOException | RuntimeException exception) {
+                    clients.remove(connection.nodeId, connection);
+                    connection.close();
+                }
+            }
+            return;
+        }
+        for (Map.Entry<Long, RuntimePunishment> entry : next.entrySet()) {
+            if (!previous.containsKey(entry.getKey())) {
+                broadcast(MessageKind.HISTORY_APPEND, punishmentCodec.encode(entry.getValue()));
+            }
+        }
+    }
+
+    private void sendHistorySnapshot(ClientConnection connection, List<RuntimePunishment> snapshot)
+            throws IOException {
+        connection.send(MessageKind.HISTORY_SNAPSHOT_BEGIN, new byte[0]);
+        sendHistoryRange(connection, snapshot, 0, snapshot.size());
+        connection.send(MessageKind.HISTORY_SNAPSHOT_END, new byte[0]);
+    }
+
+    private void sendHistoryRange(ClientConnection connection, List<RuntimePunishment> snapshot,
+                                  int from, int to) throws IOException {
+        if (from >= to) {
+            return;
+        }
+        try {
+            connection.send(MessageKind.HISTORY_SNAPSHOT_CHUNK,
+                    punishmentCodec.encodeSnapshot(snapshot.subList(from, to)));
+        } catch (IllegalArgumentException tooLarge) {
+            if (to - from == 1) {
+                throw tooLarge;
+            }
+            int middle = from + (to - from) / 2;
+            sendHistoryRange(connection, snapshot, from, middle);
+            sendHistoryRange(connection, snapshot, middle, to);
+        }
     }
 
     private void broadcast(MessageKind kind, byte[] payload) {
@@ -431,6 +622,11 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
         for (Thread thread : connectionThreads) {
             thread.interrupt();
         }
+        long joinDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L);
+        joinUntil(accepting, joinDeadline);
+        for (Thread thread : new ArrayList<>(connectionThreads)) {
+            joinUntil(thread, joinDeadline);
+        }
     }
 
     private static byte[] readFrame(DataInputStream input, int maximum) throws IOException, ProtocolException {
@@ -443,6 +639,39 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
         return frame;
     }
 
+    private static byte[] readFrameBeforeDeadline(DataInputStream input, Socket socket, int maximum,
+                                                   long deadlineNanos)
+            throws IOException, ProtocolException {
+        byte[] lengthBytes = new byte[4];
+        readFullyBeforeDeadline(input, socket, lengthBytes, deadlineNanos);
+        int length = ((lengthBytes[0] & 0xff) << 24) | ((lengthBytes[1] & 0xff) << 16)
+                | ((lengthBytes[2] & 0xff) << 8) | (lengthBytes[3] & 0xff);
+        if (length <= 0 || length > maximum) {
+            throw new ProtocolException("invalid transport frame length");
+        }
+        byte[] frame = new byte[length];
+        readFullyBeforeDeadline(input, socket, frame, deadlineNanos);
+        return frame;
+    }
+
+    private static void readFullyBeforeDeadline(DataInputStream input, Socket socket, byte[] target,
+                                                long deadlineNanos) throws IOException {
+        int offset = 0;
+        while (offset < target.length) {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0L) {
+                throw new SocketTimeoutException("Agent handshake timed out");
+            }
+            long remainingMillis = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+            socket.setSoTimeout((int) Math.min(Integer.MAX_VALUE, remainingMillis));
+            int read = input.read(target, offset, target.length - offset);
+            if (read < 0) {
+                throw new EOFException("Agent closed during handshake");
+            }
+            offset += read;
+        }
+    }
+
     private static void writeFrame(DataOutputStream output, byte[] frame) throws IOException {
         output.writeInt(frame.length);
         output.write(frame);
@@ -451,6 +680,27 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
 
     private static String emptyToNull(String value) {
         return value == null || value.isEmpty() ? null : value;
+    }
+
+    private static long monotonicMillis() {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
+    }
+
+    private static void joinUntil(Thread thread, long deadlineNanos) {
+        if (thread == null || thread == Thread.currentThread()) {
+            return;
+        }
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0L) {
+            return;
+        }
+        try {
+            long millis = TimeUnit.NANOSECONDS.toMillis(remainingNanos);
+            int nanos = (int) (remainingNanos - TimeUnit.MILLISECONDS.toNanos(millis));
+            thread.join(millis, nanos);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static String dashed(String uuid) {
@@ -469,6 +719,7 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
         private final Socket socket;
         private final BlockingQueue<byte[]> outbound = new ArrayBlockingQueue<>(64);
         private final AtomicBoolean open = new AtomicBoolean(true);
+        private final AtomicBoolean snapshotAcknowledged = new AtomicBoolean(false);
         private final Thread writer;
 
         private ClientConnection(String nodeId, ProtocolSession session, DataOutputStream output, Socket socket) {
@@ -498,6 +749,10 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
             } catch (IOException exception) {
                 close();
             }
+        }
+
+        private boolean isReady() {
+            return open.get() && snapshotAcknowledged.get() && session.isActive(System.currentTimeMillis());
         }
 
         @Override

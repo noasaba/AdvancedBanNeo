@@ -35,22 +35,33 @@ public class CommandManager {
                 }
                 return;
             }
-            Command command = Command.getByName(cmd);
-            if (command == null)
-                return;
-
-            String permission = command.getPermission();
-            if (permission != null && !Universal.get().hasPerms(sender, permission)) {
-                MessageManager.sendMessage(sender, "General.NoPerms", true);
-                return;
-            }
-
-            if (!command.validateArguments(args)) {
-                MessageManager.sendMessage(sender, command.getUsagePath(), true);
-                return;
-            }
-
-            command.execute(sender, args);
+            executeNow(sender, cmd, args);
         });
+    }
+
+    /**
+     * Executes on the caller's already-asynchronous transport thread. This is
+     * used by the Authority bridge so the complete console response can be
+     * returned before the request is acknowledged.
+     */
+    public boolean executeNow(Object sender, String cmd, String[] args) {
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            return false;
+        }
+        Command command = Command.getByName(cmd);
+        if (command == null) {
+            return false;
+        }
+        String permission = command.getPermission();
+        if (permission != null && !Universal.get().hasPerms(sender, permission)) {
+            MessageManager.sendMessage(sender, "General.NoPerms", true);
+            return true;
+        }
+        if (!command.validateArguments(args)) {
+            MessageManager.sendMessage(sender, command.getUsagePath(), true);
+            return true;
+        }
+        command.execute(sender, args);
+        return true;
     }
 }
