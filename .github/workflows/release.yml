@@ -24,6 +24,7 @@ jobs:
     - name: Build with Maven
       run: |
         mvn -B clean install --file pom.xml
+        bash scripts/verify-artifacts.sh
         mkdir artifact
         mv bundle/target/Adv*.jar artifact/
         mv velocity/target/Adv*.jar artifact/

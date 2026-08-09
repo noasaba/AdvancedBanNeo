@@ -1,5 +1,6 @@
 name: AdvancedBan
 version: ${project.version}
 main: ${project.groupId}.bungee.BungeeMain
-author: Leoko
+author: "Leoko; nanosize (noasaba)"
+description: AdvancedBan 2.3.0-compatible punishment system maintained as AdvancedBan Neo
 softDepends: [RedisBungee, LuckPerms]

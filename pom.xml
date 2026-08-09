@@ -9,6 +9,19 @@
     <version>2.3.0</version>
     <packaging>pom</packaging>
     <name>AdvancedBan Neo</name>
+    <url>https://github.com/noasaba/AdvancedBanNeo</url>
+
+    <developers>
+        <developer>
+            <name>Leoko</name>
+            <roles><role>Original author</role></roles>
+        </developer>
+        <developer>
+            <id>noasaba</id>
+            <name>nanosize</name>
+            <roles><role>Maintainer</role></roles>
+        </developer>
+    </developers>
 
     <modules>
         <module>core</module>
@@ -31,7 +44,7 @@
         <repository>
             <id>github</id>
             <name>GitHub OWNER Apache Maven Packages</name>
-            <url>https://maven.pkg.github.com/DevLeoko/AdvancedBan</url>
+            <url>https://maven.pkg.github.com/noasaba/AdvancedBanNeo</url>
         </repository>
     </distributionManagement>
 

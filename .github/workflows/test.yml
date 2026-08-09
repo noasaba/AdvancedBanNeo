@@ -42,3 +42,6 @@ jobs:
 
     - name: Test with Maven
       run: mvn -B clean verify --file pom.xml
+
+    - name: Verify packaged compatibility boundaries
+      run: bash scripts/verify-artifacts.sh

@@ -4,11 +4,12 @@
 
 The compatibility baseline is AdvancedBan 2.3.0 at commit `69f3edabfd2f16a181e4c3b4958f3ad2bc3eaabc`. The implementation deliberately keeps the public version at 2.3.0 and avoids migration steps for existing installations.
 
-The following 2.3.0 resources are byte-for-byte unchanged:
+The following 2.3.0 operational resources are byte-for-byte unchanged:
 
 - `config.yml`, `Messages.yml`, and `Layouts.yml`
-- Bukkit `plugin.yml` and BungeeCord `bungee.yml`
 - HSQLDB format, MySQL table names and columns, punishment layouts, and JDBC configuration keys
+
+The Bukkit/Bungee technical plugin name remains `AdvancedBan`, preserving existing dependencies and data folders. Branding metadata identifies the project as AdvancedBan Neo, retains Leoko as original author, and identifies `nanosize (noasaba)` as maintainer. Velocity's display name is `AdvancedBan Neo` while its stable ID remains `advancedban`. Bukkit command and alias declarations remain unchanged; its descriptor has one additive `ChatSyncerChat` soft dependency.
 
 The public `MethodInterface` methods from 2.3.0 remain callable. The legacy BungeeCord offline-permission provider classes also remain present as deprecated adapters.
 
@@ -62,15 +63,24 @@ When LuckPerms is installed on Velocity, AdvancedBan Neo now exposes its complet
 - Added immediate RedisBungee cache invalidation and an optional shared-MySQL refresh mode for Bungee/Velocity networks.
 - Serialized database-backed cache refreshes with local cache updates so an older Redis/MySQL snapshot cannot overwrite a newer punishment state.
 - Registered the complete Velocity permission surface with LuckPerms at startup, eliminating order-dependent tree discovery and first-use wildcard misses.
+- Added explicit Standalone Authority, Coordinator Authority, Agent, and Degraded Agent roles without changing standalone defaults.
+- Added a player-independent authenticated Velocity/Paper transport with per-node credentials, HMAC-SHA-256, fresh nonces, session keys, target/source checks, monotonic sequences, replay rejection, reconnect snapshots, and idempotent mutation request IDs.
+- Prevented Paper Agents from initializing or accessing punishment databases and delegated built-in commands and legacy mutation APIs to Velocity without local fallback.
+- Added optional ChatSyncer ChatEventBus and vNext pre-send gates backed only by the thread-safe in-memory mute view.
+- Persisted Paper pairing state so missing configuration cannot create a second Authority.
+- Added heartbeat deadlines, handshake cleanup, bounded asynchronous writers, and per-node atomic request idempotency.
+- Made Agent snapshot replacement atomic and removed the login/revoke race that could resurrect stale punishments.
+- Made ChatSyncer registration all-or-nothing, excluded Discord/system origins, and prevented duplicate chat feedback.
+- Coalesced Coordinator bulk revocations into one snapshot diff/broadcast instead of rescanning the full punishment table for every deleted row.
 
 ## Automated verification
 
-The normal Java 25 reactor suite passes 45 tests, plus two environment-gated MySQL 8.4 integration tests:
+The normal Java 25 reactor suite runs 109 tests: 107 pass locally and two MySQL 8.4 integration tests are environment-gated:
 
-- Core: 34
-- Bukkit/Paper: 3
+- Core: 73 passing, 2 skipped
+- Bukkit/Paper: 19
 - BungeeCord: 5
-- Velocity: 3
+- Velocity: 10
 
 The MySQL tests use two independent pools to verify advisory-lock serialization and verify rollback when one row in a batch delete is missing.
 
@@ -82,7 +92,10 @@ Velocity support is optional. Install the artifact for the platform responsible 
 
 - Bukkit/Paper-only network: install `AdvancedBan-Neo` on the server.
 - BungeeCord network: install `AdvancedBan-Neo` on BungeeCord.
-- Velocity network: install `AdvancedBan-Neo-Velocity` on Velocity.
+- Velocity without Paper enforcement: install `AdvancedBan-Neo-Velocity` on Velocity.
+- Velocity with Paper/ChatSyncer enforcement: install the Velocity artifact on Velocity and the same legacy-compatible artifact on each Paper server, then pair those Paper copies as Agents.
+
+Detailed pairing, credential rotation, DB placement, degraded behavior, and ChatSyncer operation are documented in [the Authority/Agent guide](AUTHORITY-AGENT.md).
 
 For multiple proxy instances, point each instance at the same MySQL database. RedisBungee-enabled Bungee instances invalidate one another immediately. For multi-Velocity networks, or a Bungee/Velocity transition where both proxy types are live, add the following optional key to each proxy's existing `config.yml`:
 
@@ -99,11 +112,16 @@ The following combinations were not available for full end-to-end automation and
 - A real Minecraft 26.2 client login/chat session. The available Mineflayer release rejected protocol `26.2` before connecting; proxy and backend startup were verified independently.
 - Live LuckPerms offline-user resolution on Velocity and a LuckPerms-only `ab.*` test server.
 - A live RedisBungee/Velocity mixed network and CloudNet v2/v3. Shared-MySQL locking and rollback are covered with MySQL 8.4 integration tests, but multi-process player E2E remains manual.
-- Velocity-to-Bukkit plugin-message bridging. Velocity instead provides native proxy enforcement and database-backed synchronization.
+- A live multi-process Velocity Authority/Paper Agent session. A real TCP loopback harness covers handshake, session, snapshot, delta, revoke, update, duplicate requests, and stale rejection, but the production plugins must still be smoke-tested with the deployment's firewall and addresses.
+- ChatSyncer `0.2.0-beta.10` runtime validation. That artifact was not available in the workspace or public repositories; the supplied beta.10 API contract matches the available beta.2 source/JAR and is covered by a public-API fixture, but a beta.10 server must still be smoke-tested when the artifact is supplied.
 - Third-party plugin binary tests beyond reflection checks of the 2.3.0 public compatibility surface.
 - The historical Bungee-to-Bukkit `advancedban:main` sender has no authenticated Bukkit receiver in 2.3.0. Enabling a receiver without a shared secret would let client plugin messages attempt native BanList changes, so this PR does not claim plugin messaging as a secure synchronization transport. Proxy enforcement plus shared MySQL is the supported network model.
 - BungeeCord and Velocity currently publish the required development APIs as snapshot coordinates. Pinning a timestamped snapshot would eventually become unavailable under upstream retention, so the POM follows the named upstream snapshot; organizations requiring hermetic builds should mirror the resolved artifacts internally.
 - Direct third-party calls to the legacy public `Punishment.create(...)` API intentionally retain 2.3.0 semantics and do not perform the command layer's duplicate check. Built-in commands use the new local/MySQL lock.
+- On a Paper Agent, legacy synchronous mutation APIs are forwarded only from non-main threads and fail closed on the Bukkit main thread. A synchronous return value cannot both wait for a remote Authority and satisfy Bukkit's non-blocking main-thread rule; built-in commands already run asynchronously and are fully delegated.
+- A Paper Agent does not expose local tab-completion data because Velocity owns permission decisions. Velocity-native completion remains available and existing commands/arguments are unchanged.
+- Agent runtime snapshots contain active enforcement state, not the full historical database. Built-in history/note/warn reads are delegated; third-party code requiring synchronous history should call the API on the Authority.
+- Replay protection is process-local. A future server-first challenge and durable nonce journal could further reduce short-window denial-of-service risk across Authority restarts, so credentials and the transport port must remain private and firewalled.
 
 These gaps and retained limitations require no command, permission, configuration, or data migration. No incompatible workaround was introduced.
 
