@@ -50,15 +50,17 @@ Security:
 
 Use the Authority's private address instead of `127.0.0.1` when the processes are on different hosts. Restrict the port with a firewall to the Paper hosts. The protocol authenticates and integrity-protects every message but does not encrypt punishment text, so route it over a trusted private network or an encrypted tunnel.
 
+`Node.Id` must exactly match that Paper server's name in Velocity's `[servers]` table. Velocity permits routing only to an authenticated node that has installed both its active-punishment and history snapshots and sent `READY`; an unpaired, disconnected, or still-synchronizing backend is rejected instead of becoming a mute/ban bypass.
+
 Never reuse one node's credential for a different node. Credentials are external files and are not embedded in either JAR or written to logs. On POSIX filesystems, generated Authority credentials are restricted to owner read/write; configure equivalent ACLs after copying them to Paper. To rotate a credential, stop the affected Agent, replace or remove its Authority-side key, restart Velocity so a replacement is created, copy it to the matching Paper node, and restart that Agent.
 
 The first `Mode: AGENT` startup creates `plugins/AdvancedBan/.agent-paired`. This marker prevents a missing or damaged `network.yml` from silently turning the backend into a second Authority. To intentionally return a server to standalone mode, stop it and remove `network.yml`, its node credential, and `.agent-paired` together.
 
 ## Synchronization and failure behavior
 
-The TCP connection does not depend on an online Minecraft player. Authentication uses a fresh Agent nonce, a fresh Authority nonce, HMAC-SHA-256, and a derived session key. Signed frames include protocol version, session ID, sequence, timestamp, source, target, message type, and payload. Modified, replayed, stale-session, wrong-source, wrong-target, and incompatible-version frames are rejected.
+The TCP connection does not depend on an online Minecraft player. Authentication starts with a fresh Authority challenge, binds a fresh Agent nonce and Authority nonce into the authenticated transcript, and derives a new HMAC-SHA-256 session key. Signed frames include protocol version, session ID, sequence, timestamp, source, target, message type, and payload. Modified, replayed, stale-session, wrong-source, wrong-target, expired-handshake, and incompatible-version frames are rejected, including a captured client hello replayed after an Authority restart.
 
-After authentication the Authority sends a full active-punishment snapshot. Creates, reason changes, and revocations are then sent as ordered incremental updates. A reconnect always starts a new session and full snapshot, atomically removing stale Agent state. Agent command/API requests carry an idempotency UUID and are authorized and executed at Velocity; the Agent never treats a failed remote operation as a successful local mutation.
+After authentication the Authority sends full active-punishment and chunked history snapshots. The Agent becomes ready only after both snapshots are complete. Creates, reason changes, revocations, and history additions are then sent as ordered incremental updates. A reconnect always starts a new session and full snapshot, atomically removing stale Agent state. Agent command/API requests carry a retry-stable idempotency UUID and are authorized and executed at Velocity; the Agent never treats a failed remote operation as a successful local mutation.
 
 Both sides require a response to an authenticated heartbeat. A half-open or one-way connection is closed after a missed acknowledgement, the Paper snapshot is marked unavailable, and only a new authenticated session plus full snapshot restores readiness. Bounded per-connection writer queues keep a slow node from blocking persistence or every other Agent.
 
@@ -75,7 +77,7 @@ Commands entered on a paired Paper server are forwarded to Velocity. Player iden
 
 Paper-console commands are accepted only from a node possessing that node's configured credential and execute as the Velocity console. Protect every node credential as a console-equivalent secret.
 
-Use Velocity's native registration for authoritative tab completion. A paired Paper Agent returns no local punishment/history suggestions because Paper permissions are not the network authority; actual commands remain available and are checked by Velocity. Paper console receives an acceptance notice, while detailed output is written to the Velocity console.
+Velocity remains the authority for tab completion and command output. A paired Paper Agent requests completions asynchronously using the Velocity player's identity and permissions, caches the result briefly without blocking the Paper main thread, and returns it on the next completion request. Paper-console commands execute at Velocity and their complete command output is returned to the originating Paper console.
 
 ## ChatSyncer 0.2.0-beta.10
 

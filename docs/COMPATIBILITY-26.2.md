@@ -17,9 +17,9 @@ The public `MethodInterface` methods from 2.3.0 remain callable. The legacy Bung
 
 | Platform | Build used | Result |
 | --- | --- | --- |
-| Paper | Minecraft 26.2, build 87 | Loaded, enabled, command/punishment checks, local persistence, expiry, and restart passed |
+| Paper | Minecraft 26.2, build 111 | Loaded, enabled, command/punishment checks, unchanged 2.3.0 HSQLDB data, local persistence, expiry, restart, and DB-less Agent reconnect passed |
 | BungeeCord | build 2085 | Loaded, enabled, commands and aliases passed; simultaneous proxy/backend startup passed |
-| Velocity | 4.1.0-SNAPSHOT build 14 | Native optional adapter loaded; HSQLDB, commands, aliases, plugin listing, and clean shutdown passed |
+| Velocity | 4.1.0-SNAPSHOT build 16 | Native optional adapter loaded; HSQLDB, commands, aliases, authenticated Paper Agent synchronization, reconnect, plugin listing, and clean shutdown passed |
 | MySQL | 8.4.10 | Tables, punishment creation, direct SQL inspection, restart, and persisted lookup passed |
 
 Minecraft 26.2 and current Paper require Java 25. Core, Bukkit, BungeeCord, and the legacy bundle's project/runtime classes remain Java 8 bytecode (`major version 52`) for compatibility with older deployments. The optional self-contained Velocity artifact is separate and compiled for Java 25 (`major version 69`).
@@ -72,17 +72,22 @@ When LuckPerms is installed on Velocity, AdvancedBan Neo now exposes its complet
 - Made Agent snapshot replacement atomic and removed the login/revoke race that could resurrect stale punishments.
 - Made ChatSyncer registration all-or-nothing, excluded Discord/system origins, and prevented duplicate chat feedback.
 - Coalesced Coordinator bulk revocations into one snapshot diff/broadcast instead of rescanning the full punishment table for every deleted row.
+- Bound the Agent handshake to a server-first random challenge and made readiness require complete active and history snapshots.
+- Added fail-closed Velocity backend routing keyed by the authenticated Paper `Node.Id`, authenticated-inbound liveness tracking, and reconnect-safe full state restoration.
+- Returned Authority command output to the originating Paper console and added non-blocking Authority-backed Paper tab completion.
+- Synchronized historical rows for DB-less Agents so legacy history/note/warn reads do not regain database access.
+- Made Velocity Authority database initialization and snapshot reads fail closed instead of starting with an empty authoritative state.
 
 ## Automated verification
 
-The normal Java 25 reactor suite runs 109 tests: 107 pass locally and two MySQL 8.4 integration tests are environment-gated:
+The final Java 25 reactor suite runs 126 tests. All 126 pass, including the MySQL 8.4 integration tests:
 
-- Core: 73 passing, 2 skipped
+- Core: 89
 - Bukkit/Paper: 19
 - BungeeCord: 5
-- Velocity: 10
+- Velocity: 13
 
-The MySQL tests use two independent pools to verify advisory-lock serialization and verify rollback when one row in a batch delete is missing.
+The MySQL tests use two independent pools to verify advisory-lock serialization and verify rollback when one row in a batch delete is missing. The final run had zero failures, zero errors, and zero skipped tests. Artifact verification also confirmed descriptors, Java 8/25 bytecode boundaries, database drivers, relocation, and optional API isolation.
 
 The generated legacy bundle contains the Bukkit and Bungee descriptors, both database drivers, and only Java 8-compatible classes. The separate self-contained Velocity artifact contains `velocity-plugin.json` and the same storage implementation. CI builds with Java 25, runs `clean verify`, and publishes both artifacts using current GitHub Actions versions. The release workflow's separate Javadoc phase is also reproducible from reactor-installed artifacts.
 
@@ -105,23 +110,22 @@ MySQLCacheSyncInterval: 1
 
 The value is the refresh interval in seconds. It is disabled when absent or `0`, so every unmodified AdvancedBan 2.3.0 configuration retains its previous behavior. When enabled, only online-player caches are refreshed; storage files, tables, commands, and permissions are unchanged. The native Velocity adapter remains a separate optional artifact and never requires BungeeCord.
 
-## Remaining integration coverage
+## Validation notes
 
 The following combinations were not available for full end-to-end automation and are not claimed as completed:
 
 - A real Minecraft 26.2 client login/chat session. The available Mineflayer release rejected protocol `26.2` before connecting; proxy and backend startup were verified independently.
 - Live LuckPerms offline-user resolution on Velocity and a LuckPerms-only `ab.*` test server.
 - A live RedisBungee/Velocity mixed network and CloudNet v2/v3. Shared-MySQL locking and rollback are covered with MySQL 8.4 integration tests, but multi-process player E2E remains manual.
-- A live multi-process Velocity Authority/Paper Agent session. A real TCP loopback harness covers handshake, session, snapshot, delta, revoke, update, duplicate requests, and stale rejection, but the production plugins must still be smoke-tested with the deployment's firewall and addresses.
+- The production Paper 26.2 and Velocity processes were run together over the configured TCP transport. Paper remained DB-less, delegated console commands, received Authority results, enforced expiry, and restored an Authority-side punishment created while it was disconnected after reconnect.
+- An unmodified existing AdvancedBan 2.3.0 HSQLDB data set was opened on Paper 26.2, read, mutated, restarted, and read again without conversion.
 - ChatSyncer `0.2.0-beta.10` runtime validation. That artifact was not available in the workspace or public repositories; the supplied beta.10 API contract matches the available beta.2 source/JAR and is covered by a public-API fixture, but a beta.10 server must still be smoke-tested when the artifact is supplied.
 - Third-party plugin binary tests beyond reflection checks of the 2.3.0 public compatibility surface.
 - The historical Bungee-to-Bukkit `advancedban:main` sender has no authenticated Bukkit receiver in 2.3.0. Enabling a receiver without a shared secret would let client plugin messages attempt native BanList changes, so this PR does not claim plugin messaging as a secure synchronization transport. Proxy enforcement plus shared MySQL is the supported network model.
 - BungeeCord and Velocity currently publish the required development APIs as snapshot coordinates. Pinning a timestamped snapshot would eventually become unavailable under upstream retention, so the POM follows the named upstream snapshot; organizations requiring hermetic builds should mirror the resolved artifacts internally.
 - Direct third-party calls to the legacy public `Punishment.create(...)` API intentionally retain 2.3.0 semantics and do not perform the command layer's duplicate check. Built-in commands use the new local/MySQL lock.
-- On a Paper Agent, legacy synchronous mutation APIs are forwarded only from non-main threads and fail closed on the Bukkit main thread. A synchronous return value cannot both wait for a remote Authority and satisfy Bukkit's non-blocking main-thread rule; built-in commands already run asynchronously and are fully delegated.
-- A Paper Agent does not expose local tab-completion data because Velocity owns permission decisions. Velocity-native completion remains available and existing commands/arguments are unchanged.
-- Agent runtime snapshots contain active enforcement state, not the full historical database. Built-in history/note/warn reads are delegated; third-party code requiring synchronous history should call the API on the Authority.
-- Replay protection is process-local. A future server-first challenge and durable nonce journal could further reduce short-window denial-of-service risk across Authority restarts, so credentials and the transport port must remain private and firewalled.
+- Legacy void mutation APIs invoked on a Paper Agent dispatch to the Authority without blocking Bukkit's main thread. New result-bearing asynchronous overloads are available for callers that need completion; a synchronous checked call on the main thread fails closed because it cannot safely wait for the network.
+- Paper Agent tab completion is asynchronously resolved with Velocity permissions and briefly cached; the first request for a new input may be empty while the Authority result is in flight.
 
 These gaps and retained limitations require no command, permission, configuration, or data migration. No incompatible workaround was introduced.
 
