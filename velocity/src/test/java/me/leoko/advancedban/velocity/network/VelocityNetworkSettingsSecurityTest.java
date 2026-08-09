@@ -7,10 +7,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.util.EnumSet;
 import java.util.Arrays;
 import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -20,19 +23,8 @@ class VelocityNetworkSettingsSecurityTest {
     Path dataDirectory;
 
     @Test
-    void rejectsCredentialDirectoryTraversalAndInvalidNodeIdentifiers() throws Exception {
-        writeConfig("../escaped", "survival");
-        assertThrows(IOException.class, () -> VelocityNetworkSettings.load(dataDirectory));
-
-        writeConfig("nodes", "../survival");
-        assertThrows(IOException.class, () -> VelocityNetworkSettings.load(dataDirectory));
-    }
-
-    @Test
-    void rejectsMalformedAndShortCredentials() throws Exception {
-        writeConfig("nodes", "survival");
-        Files.createDirectories(dataDirectory.resolve("nodes"));
-        Path credential = dataDirectory.resolve("nodes/survival.key");
+    void rejectsMalformedAndShortSharedCredentials() throws Exception {
+        Path credential = dataDirectory.resolve("network.key");
         Files.write(credential, "not base64%%%".getBytes(StandardCharsets.US_ASCII));
         assertThrows(IOException.class, () -> VelocityNetworkSettings.load(dataDirectory));
 
@@ -41,58 +33,57 @@ class VelocityNetworkSettingsSecurityTest {
     }
 
     @Test
-    void credentialAccessorsCannotMutateStoredAuthoritySecrets() throws Exception {
-        writeConfig("nodes", "survival");
+    void credentialAccessorCannotMutateStoredAuthoritySecret() throws Exception {
         VelocityNetworkSettings settings = VelocityNetworkSettings.load(dataDirectory);
-        byte[] original = settings.getCredentials().get("survival");
+        byte[] original = settings.getCredential();
         byte[] expected = original.clone();
 
         original[0] ^= 1;
-        settings.getCredentials().clear();
 
-        assertArrayEquals(expected, settings.getCredentials().get("survival"));
-        assertFalse(Arrays.equals(original, settings.getCredentials().get("survival")));
+        assertArrayEquals(expected, settings.getCredential());
+        assertFalse(Arrays.equals(original, settings.getCredential()));
     }
 
     @Test
-    void rejectsCredentialDirectorySymlinkThatEscapesPluginDataDirectory() throws Exception {
+    void rejectsSharedKeySymlinkThatEscapesPluginDataDirectory() throws Exception {
         Path pluginData = dataDirectory.resolve("plugin");
-        Path outside = dataDirectory.resolve("outside");
+        Path outside = dataDirectory.resolve("outside.key");
         Files.createDirectories(pluginData);
-        Files.createDirectories(outside);
-        createSymlinkOrSkip(pluginData.resolve("nodes"), outside);
-        writeConfig(pluginData, "nodes", "survival");
+        Files.write(outside, Base64.getEncoder().encode(new byte[32]));
+        createSymlinkOrSkip(pluginData.resolve("network.key"), outside);
 
         assertThrows(IOException.class, () -> VelocityNetworkSettings.load(pluginData));
-        assertFalse(Files.exists(outside.resolve("survival.key")),
-                "rejected settings must not create a secret outside the plugin directory");
     }
 
     @Test
-    void rejectsCredentialFileSymlinkThatEscapesCredentialDirectory() throws Exception {
-        Path pluginData = dataDirectory.resolve("plugin-key");
-        Path credentials = pluginData.resolve("nodes");
-        Path outside = dataDirectory.resolve("outside.key");
-        Files.createDirectories(credentials);
-        Files.write(outside, Base64.getEncoder().encode(new byte[32]));
-        createSymlinkOrSkip(credentials.resolve("survival.key"), outside);
-        writeConfig(pluginData, "nodes", "survival");
-
-        assertThrows(IOException.class, () -> VelocityNetworkSettings.load(pluginData));
+    void rejectsDirectoryAtSharedKeyPath() throws Exception {
+        Files.createDirectory(dataDirectory.resolve("network.key"));
+        assertThrows(IOException.class, () -> VelocityNetworkSettings.load(dataDirectory));
     }
 
-    private void writeConfig(String credentialDirectory, String node) throws Exception {
-        writeConfig(dataDirectory, credentialDirectory, node);
+    @Test
+    void rejectsInvalidOptionalBindAddress() throws Exception {
+        Files.write(dataDirectory.resolve("config.yml"),
+                "Network:\n  BindHost: ''\n  Port: 70000\n".getBytes(StandardCharsets.UTF_8));
+        assertThrows(IOException.class, () -> VelocityNetworkSettings.load(dataDirectory));
     }
 
-    private void writeConfig(Path pluginData, String credentialDirectory, String node) throws Exception {
-        Files.write(pluginData.resolve("network.yml"), (
-                "Enabled: true\n"
-                        + "Authority:\n  Id: velocity\n"
-                        + "Listen:\n  Host: 127.0.0.1\n  Port: 27785\n"
-                        + "Security:\n  CredentialsDirectory: " + credentialDirectory + "\n"
-                        + "AllowedNodes:\n  - " + node + "\n")
-                .getBytes(StandardCharsets.UTF_8));
+    @Test
+    void rejectsNonNumericOptionalPortInsteadOfSilentlyUsingDefault() throws Exception {
+        Files.write(dataDirectory.resolve("config.yml"),
+                "Network:\n  Port: not-a-port\n".getBytes(StandardCharsets.UTF_8));
+        assertThrows(IOException.class, () -> VelocityNetworkSettings.load(dataDirectory));
+    }
+
+    @Test
+    void generatedSharedCredentialIsOwnerOnlyOnPosixFilesystems() throws Exception {
+        VelocityNetworkSettings.load(dataDirectory);
+        try {
+            assertEquals(EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+                    Files.getPosixFilePermissions(dataDirectory.resolve("network.key")));
+        } catch (UnsupportedOperationException exception) {
+            assumeTrue(false, "POSIX permissions are unavailable");
+        }
     }
 
     private void createSymlinkOrSkip(Path link, Path target) {
