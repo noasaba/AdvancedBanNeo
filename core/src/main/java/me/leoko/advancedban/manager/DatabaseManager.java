@@ -55,6 +55,10 @@ public class DatabaseManager {
      * @param useMySQLServer whether to preferably use MySQL (uses HSQLDB as fallback)
      */
     public void setup(boolean useMySQLServer) {
+        if (!authorityAccessAllowed()) {
+            Universal.get().log("Refused to initialize punishment storage on an Agent node.");
+            return;
+        }
         useMySQL = useMySQLServer;
 
         try {
@@ -105,6 +109,9 @@ public class DatabaseManager {
      * @param parameters the parameters
      */
     public void executeStatement(SQLQuery sql, Object... parameters) {
+        if (!authorityAccessAllowed()) {
+            return;
+        }
         executeStatement(sql, false, parameters);
     }
 
@@ -113,7 +120,7 @@ public class DatabaseManager {
      * The legacy void method remains available for API compatibility.
      */
     public synchronized boolean executeStatementChecked(SQLQuery sql, Object... parameters) {
-        if (dataSource == null) {
+        if (!authorityAccessAllowed() || dataSource == null) {
             return false;
         }
         try (Connection connection = dataSource.getConnection();
@@ -135,6 +142,9 @@ public class DatabaseManager {
      * @return the result set
      */
     public ResultSet executeResultStatement(SQLQuery sql, Object... parameters) {
+        if (!authorityAccessAllowed()) {
+            return null;
+        }
         return executeStatement(sql, true, parameters);
     }
 
@@ -145,7 +155,7 @@ public class DatabaseManager {
      *         kick, or {@code null} when nothing was committed
      */
     public synchronized Integer createPunishment(boolean kick, Object... parameters) {
-        if (dataSource == null) {
+        if (!authorityAccessAllowed() || dataSource == null) {
             return null;
         }
 
@@ -179,7 +189,7 @@ public class DatabaseManager {
                                                               PunishmentType type, long now,
                                                               Object... parameters) {
         HikariDataSource activeDataSource = dataSource;
-        if (activeDataSource == null || target == null || type == null) {
+        if (!authorityAccessAllowed() || activeDataSource == null || target == null || type == null) {
             return PunishmentCreationResult.failed();
         }
         String lockName = "advancedban:" + type.getBasic().name() + ':' + target;
@@ -354,7 +364,7 @@ public class DatabaseManager {
      * No cache or event state is changed by this method.
      */
     public synchronized boolean deletePunishmentsAtomically(Collection<Integer> ids) {
-        if (dataSource == null || ids == null || ids.isEmpty()) {
+        if (!authorityAccessAllowed() || dataSource == null || ids == null || ids.isEmpty()) {
             return false;
         }
 
@@ -436,7 +446,7 @@ public class DatabaseManager {
      * @return whether there is a valid connection
      */
     public boolean isConnectionValid() {
-        return dataSource != null && dataSource.isRunning();
+        return authorityAccessAllowed() && dataSource != null && dataSource.isRunning();
     }
 
     /**
@@ -446,5 +456,9 @@ public class DatabaseManager {
      */
     public boolean isUseMySQL() {
         return useMySQL;
+    }
+
+    private boolean authorityAccessAllowed() {
+        return Universal.get().getRuntimeRole().isAuthority();
     }
 }

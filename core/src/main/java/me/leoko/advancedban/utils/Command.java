@@ -547,7 +547,12 @@ public enum Command {
                 break;
             }
         }
-        return args.length - (silentFlag == -1 ? 0 : 1) > 0;
+        for (int i = 0; i < args.length; i++) {
+            if (i != silentFlag && args[i] != null && !args[i].isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean validateTemporaryPunishmentArguments(String[] args) {

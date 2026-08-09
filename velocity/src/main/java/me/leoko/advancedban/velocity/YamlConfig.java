@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-final class YamlConfig {
+public final class YamlConfig {
     private final Path file;
     private final Map<String, Object> root;
 
@@ -24,7 +24,7 @@ final class YamlConfig {
         this.root = root;
     }
 
-    static YamlConfig load(Path file) throws IOException {
+    public static YamlConfig load(Path file) throws IOException {
         LoaderOptions options = new LoaderOptions();
         options.setAllowDuplicateKeys(false);
         try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
@@ -38,7 +38,7 @@ final class YamlConfig {
         return new YamlConfig(file, Collections.emptyMap());
     }
 
-    Object get(String path) {
+    public Object get(String path) {
         Object value = root;
         for (String part : path.split("\\.")) {
             if (!(value instanceof Map)) {
@@ -59,7 +59,7 @@ final class YamlConfig {
         return Collections.emptySet();
     }
 
-    List<String> stringList(String path) {
+    public List<String> stringList(String path) {
         Object value = get(path);
         if (!(value instanceof List)) {
             return Collections.emptyList();

@@ -1,8 +1,11 @@
 name: AdvancedBan
 version: ${project.version}
 main: ${project.groupId}.bukkit.BukkitMain
-author: Leoko
-softdepend: [Vault]
+prefix: AdvancedBan Neo
+authors: [Leoko, "nanosize (noasaba)"]
+description: AdvancedBan 2.3.0-compatible punishment system maintained as AdvancedBan Neo
+website: https://github.com/noasaba/AdvancedBanNeo
+softdepend: [Vault, ChatSyncerChat]
 api-version: 1.13
 
 commands:

@@ -11,23 +11,27 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.velocity.listener.ConnectionListenerVelocity;
+import me.leoko.advancedban.velocity.listener.AgentBackendRoutingListener;
 import me.leoko.advancedban.velocity.listener.PlayerInputListenerVelocity;
+import me.leoko.advancedban.velocity.network.VelocityCoordinatorServer;
+import me.leoko.advancedban.velocity.network.VelocityNetworkSettings;
 
 import java.nio.file.Path;
 
 @Plugin(
         id = "advancedban",
-        name = "AdvancedBan",
+        name = "AdvancedBan Neo",
         version = "2.3.0",
-        description = "Advanced punishment system",
-        url = "https://github.com/DevLeoko/AdvancedBan",
-        authors = {"Leoko"},
+        description = "AdvancedBan 2.3.0-compatible punishment system maintained as AdvancedBan Neo",
+        url = "https://github.com/noasaba/AdvancedBanNeo",
+        authors = {"Leoko", "nanosize (noasaba)"},
         dependencies = {@Dependency(id = "luckperms", optional = true)}
 )
 public final class VelocityMain {
     private final ProxyServer proxy;
     private final Path dataDirectory;
     private boolean initialized;
+    private VelocityCoordinatorServer coordinator;
 
     @Inject
     public VelocityMain(ProxyServer proxy, @DataDirectory Path dataDirectory) {
@@ -39,10 +43,21 @@ public final class VelocityMain {
     public void onInitialize(ProxyInitializeEvent event) {
         try {
             Universal.get().setup(new VelocityMethods(this, proxy, dataDirectory));
+            try {
+                coordinator = new VelocityCoordinatorServer(proxy, VelocityNetworkSettings.load(dataDirectory));
+                coordinator.start();
+            } catch (java.io.IOException exception) {
+                throw new IllegalStateException("Failed to start the Authority transport", exception);
+            }
             proxy.getEventManager().register(this, new ConnectionListenerVelocity());
             proxy.getEventManager().register(this, new PlayerInputListenerVelocity());
+            proxy.getEventManager().register(this, new AgentBackendRoutingListener(coordinator));
             initialized = true;
         } catch (RuntimeException | Error exception) {
+            if (coordinator != null) {
+                coordinator.close();
+                coordinator = null;
+            }
             if (DatabaseManager.get().isConnectionValid()) {
                 DatabaseManager.get().shutdown();
             }
@@ -53,11 +68,18 @@ public final class VelocityMain {
     @Subscribe
     public void onShutdown(ProxyShutdownEvent event) {
         if (initialized) {
+            if (coordinator != null) {
+                coordinator.close();
+            }
             Universal.get().shutdown();
         }
     }
 
     public ProxyServer getProxy() {
         return proxy;
+    }
+
+    VelocityCoordinatorServer getCoordinator() {
+        return coordinator;
     }
 }

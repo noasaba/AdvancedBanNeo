@@ -22,7 +22,9 @@ This project supports BungeeCord, Velocity, and Bukkit/Paper with MySQL and Loca
 
 The legacy-compatible `AdvancedBan-Neo` bundle supports Paper 26.2 and current BungeeCord. Velocity support is an optional, native adapter distributed as `AdvancedBan-Neo-Velocity`: place that JAR in Velocity's `plugins` directory instead of installing BungeeCord. It reuses the AdvancedBan 2.3.0 commands, aliases, `ab.*` permissions, configuration files, messages, layouts, HSQLDB storage, and MySQL schema without conversion.
 
-Velocity does not have to be installed and is not injected into an existing BungeeCord setup. For multiple proxies, configure the same MySQL database on each proxy. RedisBungee deployments receive immediate Bungee cache invalidations; mixed Bungee/Velocity or multi-Velocity networks can opt into shared-MySQL cache refresh by adding `MySQLCacheSyncInterval: 1` (seconds) to the existing config on each proxy. The setting is absent and disabled by default, so legacy installations keep their previous behavior. See [the 26.2 compatibility report](docs/COMPATIBILITY-26.2.md) for details.
+Velocity does not have to be installed and is not injected into an existing BungeeCord setup. Paper-only installations remain standalone Authorities with no new configuration. In a Velocity network, the Velocity artifact can be the sole persistent Authority while the same Paper artifact runs as a DB-less Agent. Agents receive authenticated snapshots and incremental updates over a player-independent connection; Velocity may use either the existing local database or MySQL.
+
+See [the Authority/Agent guide](docs/AUTHORITY-AGENT.md) for pairing and ChatSyncer setup, and [the 26.2 compatibility report](docs/COMPATIBILITY-26.2.md) for compatibility details.
 
 ## API
 To use the API you need to add AdvancedBan to your project and declare it as a dependency in the plugin.yml.

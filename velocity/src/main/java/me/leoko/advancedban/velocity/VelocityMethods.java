@@ -12,6 +12,7 @@ import me.leoko.advancedban.MethodInterface;
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.UUIDManager;
+import me.leoko.advancedban.runtime.RuntimeRole;
 import me.leoko.advancedban.utils.Permissionable;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
@@ -49,6 +50,11 @@ public final class VelocityMethods implements MethodInterface {
         this.plugin = plugin;
         this.proxy = proxy;
         this.dataDirectory = dataDirectory;
+    }
+
+    @Override
+    public RuntimeRole getRuntimeRole() {
+        return RuntimeRole.COORDINATOR_AUTHORITY;
     }
 
     @Override
@@ -423,6 +429,13 @@ public final class VelocityMethods implements MethodInterface {
         proxy.getAllPlayers().stream()
                 .filter(player -> Universal.get().hasPerms(player, perm))
                 .forEach(player -> notification.forEach(line -> sendMessage(player, line)));
+    }
+
+    @Override
+    public void publishPunishmentUpdate(String name, String uuid) {
+        if (plugin.getCoordinator() != null) {
+            plugin.getCoordinator().refreshAndBroadcast();
+        }
     }
 
     @Override

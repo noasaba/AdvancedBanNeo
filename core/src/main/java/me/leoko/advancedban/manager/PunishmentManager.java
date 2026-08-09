@@ -19,11 +19,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class PunishmentManager {
 
     private static PunishmentManager instance = null;
-    private final Set<Punishment> punishments = ConcurrentHashMap.newKeySet();
-    private final Set<Punishment> history = ConcurrentHashMap.newKeySet();
+    private volatile Set<Punishment> punishments = ConcurrentHashMap.newKeySet();
+    private volatile Set<Punishment> history = ConcurrentHashMap.newKeySet();
     private final Set<String> cached = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean refreshingOnlinePlayers = new AtomicBoolean();
     private final Object cacheRefreshLock = new Object();
+    private volatile boolean agentSnapshotReady;
     
     private Universal universal() {
     	return Universal.get();
@@ -72,6 +73,25 @@ public class PunishmentManager {
      * @return the interim data
      */
     public InterimData load(String name, String uuid, String ip) {
+        if (universal().getRuntimeRole().isAgent()) {
+            if (!agentSnapshotReady) {
+                return null;
+            }
+            Set<Punishment> current = new HashSet<>();
+            for (Punishment punishment : punishments) {
+                if ((matches(punishment.getUuid(), uuid) || matches(punishment.getUuid(), ip))
+                        && !punishment.isExpired()) {
+                    current.add(punishment);
+                }
+            }
+            Set<Punishment> previous = new HashSet<>();
+            for (Punishment punishment : history) {
+                if (matches(punishment.getUuid(), uuid) || matches(punishment.getUuid(), ip)) {
+                    previous.add(punishment);
+                }
+            }
+            return new InterimData(uuid, name, ip, current, previous);
+        }
         Set<Punishment> punishments = new HashSet<>();
         Set<Punishment> history = new HashSet<>();
         try (ResultSet resultsPunishments = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_USER_PUNISHMENTS_WITH_IP, uuid, ip); ResultSet resultsHistory = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY_WITH_IP, uuid, ip)) {
@@ -212,6 +232,20 @@ public class PunishmentManager {
     public List<Punishment> getPunishments(String target, PunishmentType put, boolean current) {
         List<Punishment> ptList = new ArrayList<>();
 
+        if (universal().getRuntimeRole().isAgent()) {
+            if (!agentSnapshotReady || target == null) {
+                return ptList;
+            }
+            for (Punishment punishment : current ? punishments : history) {
+                if (target.equals(punishment.getUuid())
+                        && (put == null || put == punishment.getType().getBasic())
+                        && (!current || !punishment.isExpired())) {
+                    ptList.add(punishment);
+                }
+            }
+            return ptList;
+        }
+
         if (isCached(target)) {
             for (Iterator<Punishment> iterator = (current ? punishments : history).iterator(); iterator.hasNext(); ) {
                 Punishment pt = iterator.next();
@@ -258,6 +292,49 @@ public class PunishmentManager {
     public List<Punishment> getPunishments(SQLQuery sqlQuery, Object... parameters) {
         List<Punishment> ptList = new ArrayList<>();
 
+        if (universal().getRuntimeRole().isAgent()) {
+            if (!agentSnapshotReady) {
+                return ptList;
+            }
+            Collection<Punishment> source;
+            switch (sqlQuery) {
+                case SELECT_ALL_PUNISHMENTS:
+                case SELECT_ALL_PUNISHMENTS_LIMIT:
+                case SELECT_USER_PUNISHMENTS:
+                case SELECT_USER_PUNISHMENTS_WITH_IP:
+                case SELECT_EXACT_PUNISHMENT:
+                case SELECT_PUNISHMENT_BY_ID:
+                    source = punishments;
+                    break;
+                case SELECT_ALL_PUNISHMENTS_HISTORY:
+                case SELECT_ALL_PUNISHMENTS_HISTORY_LIMIT:
+                case SELECT_USER_PUNISHMENTS_HISTORY:
+                case SELECT_USER_PUNISHMENTS_HISTORY_WITH_IP:
+                case SELECT_USER_PUNISHMENTS_HISTORY_BY_CALCULATION:
+                    source = history;
+                    break;
+                default:
+                    // Writes and schema statements are deliberately not
+                    // emulated on a DB-less Agent.
+                    return ptList;
+            }
+            for (Punishment punishment : source) {
+                if (matchesAgentQuery(punishment, sqlQuery, parameters)) {
+                    ptList.add(punishment);
+                }
+            }
+            ptList.sort(Comparator.comparingLong(Punishment::getStart).reversed());
+            if ((sqlQuery == SQLQuery.SELECT_ALL_PUNISHMENTS_LIMIT
+                    || sqlQuery == SQLQuery.SELECT_ALL_PUNISHMENTS_HISTORY_LIMIT)
+                    && parameters.length > 0 && parameters[0] instanceof Number) {
+                int limit = Math.max(0, ((Number) parameters[0]).intValue());
+                if (ptList.size() > limit) {
+                    return new ArrayList<>(ptList.subList(0, limit));
+                }
+            }
+            return ptList;
+        }
+
         ResultSet rs = DatabaseManager.get().executeResultStatement(sqlQuery, parameters);
         if (rs == null) {
             return ptList;
@@ -277,6 +354,30 @@ public class PunishmentManager {
         return ptList;
     }
 
+    private static boolean matchesAgentQuery(Punishment punishment, SQLQuery query, Object[] parameters) {
+        switch (query) {
+            case SELECT_USER_PUNISHMENTS:
+            case SELECT_USER_PUNISHMENTS_HISTORY:
+                return parameters.length >= 1 && Objects.equals(punishment.getUuid(), String.valueOf(parameters[0]));
+            case SELECT_USER_PUNISHMENTS_WITH_IP:
+            case SELECT_USER_PUNISHMENTS_HISTORY_WITH_IP:
+                return parameters.length >= 2 && (Objects.equals(punishment.getUuid(), String.valueOf(parameters[0]))
+                        || Objects.equals(punishment.getUuid(), String.valueOf(parameters[1])));
+            case SELECT_USER_PUNISHMENTS_HISTORY_BY_CALCULATION:
+                return parameters.length >= 2 && Objects.equals(punishment.getUuid(), String.valueOf(parameters[0]))
+                        && parameters[1] != null && punishment.getCalculation() != null
+                        && punishment.getCalculation().equalsIgnoreCase(String.valueOf(parameters[1]));
+            case SELECT_EXACT_PUNISHMENT:
+                return parameters.length >= 3 && Objects.equals(punishment.getUuid(), String.valueOf(parameters[0]))
+                        && punishment.getStart() == ((Number) parameters[1]).longValue()
+                        && punishment.getType().name().equals(String.valueOf(parameters[2]));
+            case SELECT_PUNISHMENT_BY_ID:
+                return parameters.length >= 1 && punishment.getId() == ((Number) parameters[0]).intValue();
+            default:
+                return true;
+        }
+    }
+
     /**
      * Get an active punishment by id.
      *
@@ -284,6 +385,11 @@ public class PunishmentManager {
      * @return the punishment
      */
     public Punishment getPunishment(int id) {
+        if (universal().getRuntimeRole().isAgent()) {
+            return getLoadedPunishments(false).stream()
+                    .filter(punishment -> punishment.getId() == id && !punishment.isExpired())
+                    .findAny().orElse(null);
+        }
         final Optional<Punishment> cachedPunishment = getLoadedPunishments(false).stream()
                 .filter(punishment -> punishment.getId() == id).findAny();
 
@@ -407,6 +513,152 @@ public class PunishmentManager {
     }
 
     /**
+     * Performs a side-effect-free, in-memory mute lookup suitable for chat
+     * pipelines whose callback thread is not controlled by AdvancedBan.
+     */
+    public Punishment getRuntimeMute(String uuid) {
+        return getRuntimePunishment(uuid, PunishmentType.MUTE);
+    }
+
+    public Punishment getRuntimeBan(String uuidOrIp) {
+        return getRuntimePunishment(uuidOrIp, PunishmentType.BAN);
+    }
+
+    private Punishment getRuntimePunishment(String target, PunishmentType basicType) {
+        if (target == null) {
+            return null;
+        }
+        String normalized = target.replace("-", "");
+        for (Punishment punishment : punishments) {
+            if (normalized.equalsIgnoreCase(punishment.getUuid())
+                    && punishment.getType().getBasic() == basicType
+                    && !punishment.isExpired()) {
+                return punishment;
+            }
+        }
+        return null;
+    }
+
+    /** Atomically installs a full Authority snapshot on an Agent. */
+    public void replaceAgentSnapshot(Collection<Punishment> snapshot) {
+        replaceAgentSnapshot(snapshot, true);
+    }
+
+    /**
+     * Installs active state while keeping the Agent unavailable until the
+     * matching history snapshot has also been installed.
+     */
+    public void beginAgentSnapshotSynchronization(Collection<Punishment> snapshot) {
+        replaceAgentSnapshot(snapshot, false);
+    }
+
+    private void replaceAgentSnapshot(Collection<Punishment> snapshot, boolean ready) {
+        if (!universal().getRuntimeRole().isAgent()) {
+            throw new IllegalStateException("Only Agent nodes accept Authority snapshots");
+        }
+        Set<Punishment> replacement = ConcurrentHashMap.newKeySet();
+        Set<Punishment> replacementHistory = ConcurrentHashMap.newKeySet();
+        if (snapshot != null) {
+            for (Punishment punishment : snapshot) {
+                if (punishment != null && !punishment.isExpired()) {
+                    replacement.add(punishment);
+                }
+            }
+        }
+        synchronized (cacheRefreshLock) {
+            punishments = replacement;
+            history = replacementHistory;
+            cached.clear();
+            agentSnapshotReady = ready;
+        }
+    }
+
+    /** Atomically installs the Authority's complete public history view. */
+    public void replaceAgentHistorySnapshot(Collection<Punishment> snapshot) {
+        if (!universal().getRuntimeRole().isAgent()) {
+            throw new IllegalStateException("Only Agent nodes accept Authority history snapshots");
+        }
+        Set<Punishment> replacement = ConcurrentHashMap.newKeySet();
+        if (snapshot != null) {
+            replacement.addAll(snapshot);
+        }
+        synchronized (cacheRefreshLock) {
+            history = replacement;
+        }
+    }
+
+    /** Publishes the active and history snapshots as one complete Authority view. */
+    public void completeAgentSnapshotSynchronization() {
+        if (!universal().getRuntimeRole().isAgent()) {
+            throw new IllegalStateException("Only Agent nodes complete Authority snapshots");
+        }
+        synchronized (cacheRefreshLock) {
+            agentSnapshotReady = true;
+        }
+    }
+
+    /** Adds an Authority-created immutable history row idempotently. */
+    public void appendAgentHistoryPunishment(Punishment punishment) {
+        if (!universal().getRuntimeRole().isAgent() || punishment == null) {
+            return;
+        }
+        synchronized (cacheRefreshLock) {
+            Set<Punishment> next = concurrentCopy(history);
+            next.removeIf(existing -> existing.getId() == punishment.getId());
+            next.add(punishment);
+            history = next;
+        }
+    }
+
+    /** Applies one idempotent Authority update without triggering DB/events. */
+    public void applyAgentPunishment(Punishment punishment) {
+        if (!universal().getRuntimeRole().isAgent() || punishment == null) {
+            return;
+        }
+        synchronized (cacheRefreshLock) {
+            Set<Punishment> next = concurrentCopy(punishments);
+            next.removeIf(existing -> existing.getId() == punishment.getId());
+            if (!punishment.isExpired()) {
+                next.add(punishment);
+            }
+            punishments = next;
+        }
+    }
+
+    /** Applies one idempotent Authority revoke without triggering DB/events. */
+    public void revokeAgentPunishment(int id) {
+        if (!universal().getRuntimeRole().isAgent()) {
+            return;
+        }
+        synchronized (cacheRefreshLock) {
+            Set<Punishment> next = concurrentCopy(punishments);
+            next.removeIf(existing -> existing.getId() == id);
+            punishments = next;
+        }
+    }
+
+    private static Set<Punishment> concurrentCopy(Collection<Punishment> source) {
+        Set<Punishment> copy = ConcurrentHashMap.newKeySet();
+        copy.addAll(source);
+        return copy;
+    }
+
+    public boolean isAgentSnapshotReady() {
+        return agentSnapshotReady;
+    }
+
+    public void markAgentSnapshotUnavailable() {
+        if (universal().getRuntimeRole().isAgent()) {
+            synchronized (cacheRefreshLock) {
+                agentSnapshotReady = false;
+                // Active punishments remain for fail-closed enforcement, but
+                // history must not be exposed as fresh after a disconnect.
+                history = ConcurrentHashMap.newKeySet();
+            }
+        }
+    }
+
+    /**
      * Check whether the data for the given uuid, ip or username are currently cached.
      *
      * @param target the target (uuid, ip or username)
@@ -441,6 +693,13 @@ public class PunishmentManager {
      * @return the calculation level
      */
     public int getCalculationLevel(String uuid, String layout) {
+        if (universal().getRuntimeRole().isAgent()) {
+            if (!agentSnapshotReady || uuid == null || layout == null) {
+                return 0;
+            }
+            return (int) history.stream().filter(pt -> uuid.equals(pt.getUuid())
+                    && layout.equalsIgnoreCase(pt.getCalculation())).count();
+        }
         if (isCached(uuid)) {
             return (int) history.stream().filter(pt -> pt.getUuid().equals(uuid) && layout.equalsIgnoreCase(pt.getCalculation())).count();
         }
@@ -488,7 +747,7 @@ public class PunishmentManager {
      * @return the cached punishments
      */
     public Set<Punishment> getLoadedPunishments(boolean checkExpired) {
-        if (checkExpired) {
+        if (checkExpired && universal().getRuntimeRole().isAuthority()) {
             List<Punishment> toDelete = new ArrayList<>();
             for (Punishment pu : punishments) {
                 if (pu.isExpired()) {

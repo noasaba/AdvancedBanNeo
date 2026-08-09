@@ -2,6 +2,7 @@ package me.leoko.advancedban;
 
 import com.google.gson.Gson;
 import me.leoko.advancedban.manager.*;
+import me.leoko.advancedban.runtime.RuntimeRole;
 import me.leoko.advancedban.utils.Command;
 import me.leoko.advancedban.utils.PermissionManifest;
 import me.leoko.advancedban.utils.InterimData;
@@ -41,6 +42,7 @@ public class Universal {
     private final Map<String, String> ips = new ConcurrentHashMap<>();
     private MethodInterface mi;
     private LogManager logManager;
+    private volatile RuntimeRole runtimeRole = RuntimeRole.STANDALONE_AUTHORITY;
 
     private static boolean redis = false;
 
@@ -68,19 +70,29 @@ public class Universal {
     public void setup(MethodInterface mi) {
         this.mi = mi;
         mi.loadFiles();
+        runtimeRole = mi.getRuntimeRole();
         logManager = new LogManager();
         UpdateManager.get().setup();
         UUIDManager.get().setup();
 
-        try {
-            DatabaseManager.get().setup(mi.getBoolean(mi.getConfig(), "UseMySQL", false));
-        } catch (Exception ex) {
-            log("Failed enabling database-manager...");
-            debugException(ex);
+        if (runtimeRole.isAuthority()) {
+            try {
+                DatabaseManager.get().setup(mi.getBoolean(mi.getConfig(), "UseMySQL", false));
+                verifyAuthorityStorage(runtimeRole, DatabaseManager.get().isConnectionValid());
+            } catch (Exception ex) {
+                log("Failed enabling database-manager...");
+                debugException(ex);
+                if (runtimeRole == RuntimeRole.COORDINATOR_AUTHORITY) {
+                    throw new IllegalStateException(
+                            "Velocity Authority cannot start without punishment storage", ex);
+                }
+            }
         }
 
         mi.setupMetrics();
-        PunishmentManager.get().setup();
+        if (runtimeRole.isAuthority()) {
+            PunishmentManager.get().setup();
+        }
 
         for (Command command : Command.values()) {
             for (String commandName : command.getNames()) {
@@ -103,7 +115,8 @@ public class Universal {
                     + "\n&8|   &cName: &7AdvancedBan&r"
                     + "\n&8|   &cDeveloper: &7Leoko&r"
                     + "\n&8|   &cVersion: &7" + mi.getVersion() + "&r"
-                    + "\n&8|   &cStorage: &7" + (DatabaseManager.get().isUseMySQL() ? "MySQL (external)" : "HSQLDB (local)") + "&r"
+                    + "\n&8|   &cRole: &7" + runtimeRole + "&r"
+                    + "\n&8|   &cStorage: &7" + storageDescription() + "&r"
                     + "\n&8| &cSupport:&r"
                     + "\n&8|   &cGithub: &7https://github.com/DevLeoko/AdvancedBan/issues &r"
                     + "\n&8|   &cDiscord: &7https://discord.gg/ycDG6rS &r"
@@ -121,7 +134,9 @@ public class Universal {
      * Shutdown.
      */
     public void shutdown() {
-        DatabaseManager.get().shutdown();
+        if (runtimeRole.isAuthority()) {
+            DatabaseManager.get().shutdown();
+        }
 
         if (mi.getBoolean(mi.getConfig(), "DetailedDisableMessage", true)) {
             mi.log("\n \n&8[]=====[&7Disabling AdvancedBan&8]=====[]"
@@ -129,7 +144,8 @@ public class Universal {
                     + "\n&8|   &cName: &7AdvancedBan"
                     + "\n&8|   &cDeveloper: &7Leoko"
                     + "\n&8|   &cVersion: &7" + getMethods().getVersion()
-                    + "\n&8|   &cStorage: &7" + (DatabaseManager.get().isUseMySQL() ? "MySQL (external)" : "HSQLDB (local)")
+                    + "\n&8|   &cRole: &7" + runtimeRole
+                    + "\n&8|   &cStorage: &7" + storageDescription()
                     + "\n&8| &cSupport:"
                     + "\n&8|   &cGithub: &7https://github.com/DevLeoko/AdvancedBan/issues"
                     + "\n&8|   &cDiscord: &7https://discord.gg/ycDG6rS"
@@ -148,6 +164,30 @@ public class Universal {
      */
     public MethodInterface getMethods() {
         return mi;
+    }
+
+    public RuntimeRole getRuntimeRole() {
+        return runtimeRole;
+    }
+
+    /**
+     * Updates Agent health without allowing a process to cross the authority
+     * boundary after bootstrap.
+     *
+     * @param next AGENT or AGENT_DEGRADED
+     */
+    public synchronized void updateAgentRole(RuntimeRole next) {
+        if (!runtimeRole.isAgent() || next == null || !next.isAgent()) {
+            throw new IllegalStateException("Runtime authority role cannot change after bootstrap");
+        }
+        runtimeRole = next;
+    }
+
+    private String storageDescription() {
+        if (!runtimeRole.isAuthority()) {
+            return "Agent runtime state (no local punishment database)";
+        }
+        return DatabaseManager.get().isUseMySQL() ? "MySQL (external)" : "HSQLDB (local)";
     }
 
     /**
@@ -300,6 +340,9 @@ public class Universal {
      */
     public String callConnection(String name, String ip) {
         name = name.toLowerCase();
+        if (runtimeRole.isAgent() && !PunishmentManager.get().isAgentSnapshotReady()) {
+            return "[AdvancedBan] Authority state unavailable; login is temporarily locked.";
+        }
         String uuid = UUIDManager.get().getUUID(name);
         if (uuid == null) return "[AdvancedBan] Failed to fetch your UUID";
 
@@ -311,7 +354,7 @@ public class Universal {
         InterimData interimData = PunishmentManager.get().load(name, uuid, ip);
 
         if (interimData == null) {
-            if (getMethods().getBoolean(mi.getConfig(), "LockdownOnError", true)) {
+            if (mustLockdownOnStorageFailure()) {
                 return "[AdvancedBan] Failed to load player data!";
             } else {
                 return null;
@@ -321,11 +364,26 @@ public class Universal {
         Punishment pt = interimData.getBan();
 
         if (pt == null) {
-            interimData.accept();
+            if (!runtimeRole.isAgent()) {
+                interimData.accept();
+            }
             return null;
         }
 
         return pt.getLayoutBSN();
+    }
+
+    private boolean mustLockdownOnStorageFailure() {
+        // A coordinator is the sole network authority; allowing login after a
+        // failed DB read would make every backend snapshot silently fail open.
+        return runtimeRole == RuntimeRole.COORDINATOR_AUTHORITY
+                || getMethods().getBoolean(mi.getConfig(), "LockdownOnError", true);
+    }
+
+    static void verifyAuthorityStorage(RuntimeRole role, boolean connectionValid) {
+        if (role == RuntimeRole.COORDINATOR_AUTHORITY && !connectionValid) {
+            throw new IllegalStateException("Coordinator Authority storage is unavailable");
+        }
     }
 
     /**

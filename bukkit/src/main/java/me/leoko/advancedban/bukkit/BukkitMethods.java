@@ -5,12 +5,16 @@ import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.bukkit.event.PunishmentEvent;
 import me.leoko.advancedban.bukkit.event.RevokePunishmentEvent;
 import me.leoko.advancedban.bukkit.listener.CommandReceiver;
+import me.leoko.advancedban.bukkit.network.PaperAgentClient;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.UUIDManager;
 import me.leoko.advancedban.utils.Permissionable;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
+import me.leoko.advancedban.network.protocol.AuthorityRequest;
+import me.leoko.advancedban.network.protocol.AuthorityRequestCodec;
+import me.leoko.advancedban.runtime.RuntimeRole;
 import org.bstats.bukkit.Metrics;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -30,9 +34,14 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.FutureTask;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
@@ -51,13 +60,31 @@ public class BukkitMethods implements MethodInterface {
     private YamlConfiguration layouts;
     private YamlConfiguration mysql;
     private BiFunction<OfflinePlayer, String, Boolean> permissionVault;
+    private final RuntimeRole runtimeRole;
+    private volatile PaperAgentClient agentClient;
+    private final ConcurrentMap<String, CompletionEntry> authorityCompletions = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Boolean> pendingCompletions = new ConcurrentHashMap<>();
 
     public BukkitMethods() {
+        this(RuntimeRole.STANDALONE_AUTHORITY);
+    }
+
+    public BukkitMethods(RuntimeRole runtimeRole) {
+        this.runtimeRole = runtimeRole;
         // Vault support
         if (Bukkit.getServer().getPluginManager().getPlugin("Vault") != null) {
             RegisteredServiceProvider<net.milkbowl.vault.permission.Permission> rsp = Bukkit.getServer().getServicesManager().getRegistration(net.milkbowl.vault.permission.Permission.class);
             permissionVault = (player, perms) -> rsp.getProvider().playerHas(null, player, perms);
         }
+    }
+
+    @Override
+    public RuntimeRole getRuntimeRole() {
+        return runtimeRole;
+    }
+
+    public void setAgentClient(PaperAgentClient agentClient) {
+        this.agentClient = agentClient;
     }
 
     @Override
@@ -138,7 +165,8 @@ public class BukkitMethods implements MethodInterface {
     @Override
     public void setupMetrics() {
         Metrics metrics = new Metrics(getPlugin());
-        metrics.addCustomChart(new Metrics.SimplePie("MySQL", () -> DatabaseManager.get().isUseMySQL() ? "yes" : "no"));
+        metrics.addCustomChart(new Metrics.SimplePie("MySQL", () ->
+                runtimeRole.isAuthority() && DatabaseManager.get().isUseMySQL() ? "yes" : "no"));
     }
 
     @Override
@@ -174,9 +202,13 @@ public class BukkitMethods implements MethodInterface {
             command.setExecutor(CommandReceiver.get());
             if (tabCompleter != null)
                 command.setTabCompleter((commandSender, c, s, args) -> {
-                    if (command.getPermission() != null && !hasPerms(commandSender, command.getPermission()))
+                    if (!runtimeRole.isAgent() && command.getPermission() != null
+                            && !hasPerms(commandSender, command.getPermission()))
                         return Collections.emptyList();
-                    return tabCompleter.onTabComplete(commandSender, args);
+                    if (!runtimeRole.isAgent()) {
+                        return tabCompleter.onTabComplete(commandSender, args);
+                    }
+                    return getAuthorityCompletions(commandSender, cmd, args);
                 });
         } else {
             System.out.println("AdvancedBan >> Failed to register command " + cmd);
@@ -287,7 +319,11 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public boolean callChat(Object player) {
-        Punishment pnt = PunishmentManager.get().getMute(UUIDManager.get().getUUID(getName(player)));
+        if (runtimeRole.isAgent() && !PunishmentManager.get().isAgentSnapshotReady()) {
+            sendMessage(player, "§c[AdvancedBan] Authority state unavailable; chat is temporarily locked.");
+            return true;
+        }
+        Punishment pnt = PunishmentManager.get().getRuntimeMute(getInternUUID(player));
         if (pnt != null) {
             pnt.getLayout().forEach(str -> sendMessage(player, str));
             return true;
@@ -300,8 +336,14 @@ public class BukkitMethods implements MethodInterface {
         if (cmd == null || cmd.length() < 2) {
             return false;
         }
+        if (runtimeRole.isAgent() && !PunishmentManager.get().isAgentSnapshotReady()
+                && Universal.get().isMuteCommand(cmd.substring(1))) {
+            sendMessage(player, "§c[AdvancedBan] Authority state unavailable; muted commands are temporarily locked.");
+            return true;
+        }
         Punishment pnt;
-        if (Universal.get().isMuteCommand(cmd.substring(1)) && (pnt = PunishmentManager.get().getMute(UUIDManager.get().getUUID(getName(player)))) != null) {
+        if (Universal.get().isMuteCommand(cmd.substring(1))
+                && (pnt = PunishmentManager.get().getRuntimeMute(getInternUUID(player))) != null) {
             pnt.getLayout().forEach(str -> sendMessage(player, str));
             return true;
         }
@@ -421,6 +463,98 @@ public class BukkitMethods implements MethodInterface {
     @Override
     public boolean isUnitTesting() {
         return false;
+    }
+
+    @Override
+    public boolean submitAuthorityCommand(Object sender, String command, String[] arguments) {
+        PaperAgentClient client = agentClient;
+        if (client == null) {
+            return false;
+        }
+        AuthorityRequest.SenderKind kind = sender instanceof Player
+                ? AuthorityRequest.SenderKind.PLAYER : AuthorityRequest.SenderKind.CONSOLE;
+        String uuid = sender instanceof Player ? getInternUUID(sender) : "";
+        List<String> values = new ArrayList<>();
+        values.add(command);
+        values.addAll(Arrays.asList(arguments));
+        AuthorityRequestCodec.Result result = client.submitResult(new AuthorityRequest(UUID.randomUUID(),
+                AuthorityRequest.Action.COMMAND, kind, uuid, getName(sender), values));
+        boolean accepted = result != null && result.isSuccess();
+        if (accepted && kind == AuthorityRequest.SenderKind.CONSOLE && result.getDetail() != null
+                && !result.getDetail().isEmpty() && !"accepted".equals(result.getDetail())) {
+            for (String line : result.getDetail().split("\\n", -1)) {
+                sendMessage(sender, line);
+            }
+        }
+        return accepted;
+    }
+
+    @Override
+    public boolean submitAuthorityRequest(AuthorityRequest request) {
+        PaperAgentClient client = agentClient;
+        return client != null && !Bukkit.isPrimaryThread() && client.submit(request);
+    }
+
+    @Override
+    public CompletableFuture<Boolean> submitAuthorityRequestAsync(AuthorityRequest request) {
+        PaperAgentClient client = agentClient;
+        if (client == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+        return client.submitAsync(request).thenApply(result -> result != null && result.isSuccess());
+    }
+
+    private List<String> getAuthorityCompletions(CommandSender sender, String command, String[] arguments) {
+        PaperAgentClient client = agentClient;
+        if (client == null || Universal.get().getRuntimeRole() != RuntimeRole.AGENT) {
+            return Collections.emptyList();
+        }
+        String senderId = sender instanceof Player
+                ? ((Player) sender).getUniqueId().toString().replace("-", "") : "console";
+        String key = senderId + '\u0000' + command.toLowerCase() + '\u0000' + String.join("\u0000", arguments);
+        long now = System.currentTimeMillis();
+        CompletionEntry cached = authorityCompletions.get(key);
+        if (cached != null && cached.expiresAt >= now) {
+            return cached.values;
+        }
+        if (authorityCompletions.size() > 2048) {
+            authorityCompletions.clear();
+        }
+        if (pendingCompletions.putIfAbsent(key, Boolean.TRUE) == null) {
+            List<String> values = new ArrayList<>();
+            values.add(command);
+            values.addAll(Arrays.asList(arguments));
+            AuthorityRequest.SenderKind kind = sender instanceof Player
+                    ? AuthorityRequest.SenderKind.PLAYER : AuthorityRequest.SenderKind.CONSOLE;
+            AuthorityRequest request = new AuthorityRequest(UUID.randomUUID(),
+                    AuthorityRequest.Action.TAB_COMPLETE, kind,
+                    sender instanceof Player ? senderId : "", sender.getName(), values);
+            client.submitAsync(request).whenComplete((result, failure) -> {
+                try {
+                    if (failure == null && result != null && result.isSuccess()) {
+                        List<String> suggestions = result.getDetail().isEmpty()
+                                ? Collections.emptyList()
+                                : Arrays.asList(result.getDetail().split("\u001f", -1));
+                        authorityCompletions.put(key, new CompletionEntry(
+                                Collections.unmodifiableList(new ArrayList<>(suggestions)),
+                                System.currentTimeMillis() + 5_000L));
+                    }
+                } finally {
+                    pendingCompletions.remove(key);
+                }
+            });
+        }
+        return Collections.emptyList();
+    }
+
+    private static final class CompletionEntry {
+        private final List<String> values;
+        private final long expiresAt;
+
+        private CompletionEntry(List<String> values, long expiresAt) {
+            this.values = values;
+            this.expiresAt = expiresAt;
+        }
     }
 
     private <T> T callSync(Supplier<T> action) {

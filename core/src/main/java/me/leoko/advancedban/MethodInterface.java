@@ -2,17 +2,48 @@ package me.leoko.advancedban;
 
 import me.leoko.advancedban.utils.Permissionable;
 import me.leoko.advancedban.utils.Punishment;
+import me.leoko.advancedban.runtime.RuntimeRole;
+import me.leoko.advancedban.network.protocol.AuthorityRequest;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
 
 import java.io.File;
 import java.io.InputStreamReader;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * The Method Interface is used to define universal actions which are dependent on the server software used.
  */
 public interface MethodInterface {
+
+    /**
+     * Returns the local process responsibility. Legacy adapters remain
+     * standalone authorities by default.
+     *
+     * @return this process' runtime role
+     */
+    default RuntimeRole getRuntimeRole() {
+        return RuntimeRole.STANDALONE_AUTHORITY;
+    }
+
+    /** Sends an Agent operation to its Authority. Legacy adapters fail closed. */
+    default boolean submitAuthorityRequest(AuthorityRequest request) {
+        return false;
+    }
+
+    /**
+     * Non-blocking Agent operation. Platform adapters may override this to
+     * safely support API calls made from their event/main thread.
+     */
+    default CompletableFuture<Boolean> submitAuthorityRequestAsync(AuthorityRequest request) {
+        return CompletableFuture.completedFuture(submitAuthorityRequest(request));
+    }
+
+    /** Delegates a complete built-in command before local processing. */
+    default boolean submitAuthorityCommand(Object sender, String command, String[] arguments) {
+        return false;
+    }
     /**
      * Creates and load the different configuration files.
      */
