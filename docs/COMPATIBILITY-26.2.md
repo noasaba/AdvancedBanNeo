@@ -64,28 +64,29 @@ When LuckPerms is installed on Velocity, AdvancedBan Neo now exposes its complet
 - Serialized database-backed cache refreshes with local cache updates so an older Redis/MySQL snapshot cannot overwrite a newer punishment state.
 - Registered the complete Velocity permission surface with LuckPerms at startup, eliminating order-dependent tree discovery and first-use wildcard misses.
 - Added explicit Standalone Authority, Coordinator Authority, Agent, and Degraded Agent roles without changing standalone defaults.
-- Added a player-independent authenticated Velocity/Paper transport with per-node credentials, HMAC-SHA-256, fresh nonces, session keys, target/source checks, monotonic sequences, replay rejection, reconnect snapshots, and idempotent mutation request IDs.
+- Added a player-independent authenticated Velocity/Paper transport with one explicitly shared external credential, HMAC-SHA-256, fresh nonces, session keys, target/source checks, monotonic sequences, replay rejection, reconnect snapshots, and idempotent mutation request IDs.
 - Prevented Paper Agents from initializing or accessing punishment databases and delegated built-in commands and legacy mutation APIs to Velocity without local fallback.
 - Added optional ChatSyncer ChatEventBus and vNext pre-send gates backed only by the thread-safe in-memory mute view.
-- Persisted Paper pairing state so missing configuration cannot create a second Authority.
+- Made platform roles automatic: Velocity is the Coordinator Authority, an unpaired Paper remains standalone, and copying the shared `network.key` pairs Paper as an Agent without `network.yml`.
+- Persisted Paper pairing state so a missing key cannot create a second Authority.
 - Added heartbeat deadlines, handshake cleanup, bounded asynchronous writers, and per-node atomic request idempotency.
 - Made Agent snapshot replacement atomic and removed the login/revoke race that could resurrect stale punishments.
 - Made ChatSyncer registration all-or-nothing, excluded Discord/system origins, and prevented duplicate chat feedback.
 - Coalesced Coordinator bulk revocations into one snapshot diff/broadcast instead of rescanning the full punishment table for every deleted row.
 - Bound the Agent handshake to a server-first random challenge and made readiness require complete active and history snapshots.
-- Added fail-closed Velocity backend routing keyed by the authenticated Paper `Node.Id`, authenticated-inbound liveness tracking, and reconnect-safe full state restoration.
+- Added authenticated-inbound Agent liveness tracking and reconnect-safe full state restoration. With shared-key automatic pairing, Velocity keeps global login/chat/command enforcement active while each Paper Agent fails closed locally; backend-name routing is not inferred from the Agent's internal UUID.
 - Returned Authority command output to the originating Paper console and added non-blocking Authority-backed Paper tab completion.
 - Synchronized historical rows for DB-less Agents so legacy history/note/warn reads do not regain database access.
 - Made Velocity Authority database initialization and snapshot reads fail closed instead of starting with an empty authoritative state.
 
 ## Automated verification
 
-The final Java 25 reactor suite runs 126 tests. All 126 pass, including the MySQL 8.4 integration tests:
+The final Java 25 reactor suite runs 137 tests. All 137 pass, including the MySQL 8.4 integration tests:
 
-- Core: 89
-- Bukkit/Paper: 19
+- Core: 91
+- Bukkit/Paper: 27
 - BungeeCord: 5
-- Velocity: 13
+- Velocity: 14
 
 The MySQL tests use two independent pools to verify advisory-lock serialization and verify rollback when one row in a batch delete is missing. The final run had zero failures, zero errors, and zero skipped tests. Artifact verification also confirmed descriptors, Java 8/25 bytecode boundaries, database drivers, relocation, and optional API isolation.
 
@@ -101,6 +102,8 @@ Velocity support is optional. Install the artifact for the platform responsible 
 - Velocity with Paper/ChatSyncer enforcement: install the Velocity artifact on Velocity and the same legacy-compatible artifact on each Paper server, then pair those Paper copies as Agents.
 
 Detailed pairing, credential rotation, DB placement, degraded behavior, and ChatSyncer operation are documented in [the Authority/Agent guide](AUTHORITY-AGENT.md).
+
+Authority/Agent networking requires no separate `network.yml`. The shared key enables pairing automatically and both sides default to `127.0.0.1:27785`. Deployments needing a different address can use the optional `Network.BindHost` / `Network.Port` keys in Velocity's existing `config.yml` and `Network.CoordinatorHost` / `Network.CoordinatorPort` in Paper's existing `config.yml`.
 
 For multiple proxy instances, point each instance at the same MySQL database. RedisBungee-enabled Bungee instances invalidate one another immediately. For multi-Velocity networks, or a Bungee/Velocity transition where both proxy types are live, add the following optional key to each proxy's existing `config.yml`:
 

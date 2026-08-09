@@ -24,6 +24,8 @@ The legacy-compatible `AdvancedBan-Neo` bundle supports Paper 26.2 and current B
 
 Velocity does not have to be installed and is not injected into an existing BungeeCord setup. Paper-only installations remain standalone Authorities with no new configuration. In a Velocity network, the Velocity artifact can be the sole persistent Authority while the same Paper artifact runs as a DB-less Agent. Agents receive authenticated snapshots and incremental updates over a player-independent connection; Velocity may use either the existing local database or MySQL.
 
+Velocity creates one external `network.key`; copying that file into each Paper AdvancedBan data folder automatically pairs those servers as Agents. No `network.yml` is required, and both sides default to `127.0.0.1:27785`. Different addresses can be set with the optional `Network.*` keys in the existing `config.yml`.
+
 See [the Authority/Agent guide](docs/AUTHORITY-AGENT.md) for pairing and ChatSyncer setup, and [the 26.2 compatibility report](docs/COMPATIBILITY-26.2.md) for compatibility details.
 
 ## API
