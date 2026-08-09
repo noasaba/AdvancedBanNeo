@@ -28,6 +28,13 @@ public class CommandManager {
      */
     public void onCommand(final Object sender, final String cmd, final String[] args) {
         Universal.get().getMethods().runAsync(() -> {
+            if (Universal.get().getRuntimeRole().isAgent()) {
+                if (!Universal.get().getMethods().submitAuthorityCommand(sender, cmd, args)) {
+                    Universal.get().getMethods().sendMessage(sender,
+                            "§c[AdvancedBan] Authority unavailable; no local punishment was changed.");
+                }
+                return;
+            }
             Command command = Command.getByName(cmd);
             if (command == null)
                 return;

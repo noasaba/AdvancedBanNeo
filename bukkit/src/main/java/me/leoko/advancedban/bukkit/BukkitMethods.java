@@ -5,12 +5,15 @@ import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.bukkit.event.PunishmentEvent;
 import me.leoko.advancedban.bukkit.event.RevokePunishmentEvent;
 import me.leoko.advancedban.bukkit.listener.CommandReceiver;
+import me.leoko.advancedban.bukkit.network.PaperAgentClient;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.UUIDManager;
 import me.leoko.advancedban.utils.Permissionable;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
+import me.leoko.advancedban.network.protocol.AuthorityRequest;
+import me.leoko.advancedban.runtime.RuntimeRole;
 import org.bstats.bukkit.Metrics;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -30,6 +33,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -51,13 +56,29 @@ public class BukkitMethods implements MethodInterface {
     private YamlConfiguration layouts;
     private YamlConfiguration mysql;
     private BiFunction<OfflinePlayer, String, Boolean> permissionVault;
+    private final RuntimeRole runtimeRole;
+    private volatile PaperAgentClient agentClient;
 
     public BukkitMethods() {
+        this(RuntimeRole.STANDALONE_AUTHORITY);
+    }
+
+    public BukkitMethods(RuntimeRole runtimeRole) {
+        this.runtimeRole = runtimeRole;
         // Vault support
         if (Bukkit.getServer().getPluginManager().getPlugin("Vault") != null) {
             RegisteredServiceProvider<net.milkbowl.vault.permission.Permission> rsp = Bukkit.getServer().getServicesManager().getRegistration(net.milkbowl.vault.permission.Permission.class);
             permissionVault = (player, perms) -> rsp.getProvider().playerHas(null, player, perms);
         }
+    }
+
+    @Override
+    public RuntimeRole getRuntimeRole() {
+        return runtimeRole;
+    }
+
+    public void setAgentClient(PaperAgentClient agentClient) {
+        this.agentClient = agentClient;
     }
 
     @Override
@@ -138,7 +159,8 @@ public class BukkitMethods implements MethodInterface {
     @Override
     public void setupMetrics() {
         Metrics metrics = new Metrics(getPlugin());
-        metrics.addCustomChart(new Metrics.SimplePie("MySQL", () -> DatabaseManager.get().isUseMySQL() ? "yes" : "no"));
+        metrics.addCustomChart(new Metrics.SimplePie("MySQL", () ->
+                runtimeRole.isAuthority() && DatabaseManager.get().isUseMySQL() ? "yes" : "no"));
     }
 
     @Override
@@ -174,9 +196,17 @@ public class BukkitMethods implements MethodInterface {
             command.setExecutor(CommandReceiver.get());
             if (tabCompleter != null)
                 command.setTabCompleter((commandSender, c, s, args) -> {
-                    if (command.getPermission() != null && !hasPerms(commandSender, command.getPermission()))
+                    if (!runtimeRole.isAgent() && command.getPermission() != null
+                            && !hasPerms(commandSender, command.getPermission()))
                         return Collections.emptyList();
-                    return tabCompleter.onTabComplete(commandSender, args);
+                    if (!runtimeRole.isAgent()) {
+                        return tabCompleter.onTabComplete(commandSender, args);
+                    }
+                    // Velocity is the permission authority. Do not expose
+                    // target/history suggestions by pretending every Paper
+                    // sender has every permission. Velocity's native command
+                    // registration provides the authoritative completion.
+                    return Collections.emptyList();
                 });
         } else {
             System.out.println("AdvancedBan >> Failed to register command " + cmd);
@@ -287,7 +317,11 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public boolean callChat(Object player) {
-        Punishment pnt = PunishmentManager.get().getMute(UUIDManager.get().getUUID(getName(player)));
+        if (runtimeRole.isAgent() && !PunishmentManager.get().isAgentSnapshotReady()) {
+            sendMessage(player, "§c[AdvancedBan] Authority state unavailable; chat is temporarily locked.");
+            return true;
+        }
+        Punishment pnt = PunishmentManager.get().getRuntimeMute(getInternUUID(player));
         if (pnt != null) {
             pnt.getLayout().forEach(str -> sendMessage(player, str));
             return true;
@@ -300,8 +334,14 @@ public class BukkitMethods implements MethodInterface {
         if (cmd == null || cmd.length() < 2) {
             return false;
         }
+        if (runtimeRole.isAgent() && !PunishmentManager.get().isAgentSnapshotReady()
+                && Universal.get().isMuteCommand(cmd.substring(1))) {
+            sendMessage(player, "§c[AdvancedBan] Authority state unavailable; muted commands are temporarily locked.");
+            return true;
+        }
         Punishment pnt;
-        if (Universal.get().isMuteCommand(cmd.substring(1)) && (pnt = PunishmentManager.get().getMute(UUIDManager.get().getUUID(getName(player)))) != null) {
+        if (Universal.get().isMuteCommand(cmd.substring(1))
+                && (pnt = PunishmentManager.get().getRuntimeMute(getInternUUID(player))) != null) {
             pnt.getLayout().forEach(str -> sendMessage(player, str));
             return true;
         }
@@ -421,6 +461,33 @@ public class BukkitMethods implements MethodInterface {
     @Override
     public boolean isUnitTesting() {
         return false;
+    }
+
+    @Override
+    public boolean submitAuthorityCommand(Object sender, String command, String[] arguments) {
+        PaperAgentClient client = agentClient;
+        if (client == null) {
+            return false;
+        }
+        AuthorityRequest.SenderKind kind = sender instanceof Player
+                ? AuthorityRequest.SenderKind.PLAYER : AuthorityRequest.SenderKind.CONSOLE;
+        String uuid = sender instanceof Player ? getInternUUID(sender) : "";
+        List<String> values = new ArrayList<>();
+        values.add(command);
+        values.addAll(Arrays.asList(arguments));
+        boolean accepted = client.submit(new AuthorityRequest(UUID.randomUUID(), AuthorityRequest.Action.COMMAND,
+                kind, uuid, getName(sender), values));
+        if (accepted && kind == AuthorityRequest.SenderKind.CONSOLE) {
+            sendMessage(sender, "§7[AdvancedBan Neo] Command accepted by the Velocity Authority; "
+                    + "detailed output is available in the Velocity console.");
+        }
+        return accepted;
+    }
+
+    @Override
+    public boolean submitAuthorityRequest(AuthorityRequest request) {
+        PaperAgentClient client = agentClient;
+        return client != null && !Bukkit.isPrimaryThread() && client.submit(request);
     }
 
     private <T> T callSync(Supplier<T> action) {

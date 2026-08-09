@@ -6,12 +6,16 @@ import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.manager.MessageManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.TimeManager;
+import me.leoko.advancedban.network.protocol.AuthorityRequest;
+import me.leoko.advancedban.runtime.RuntimeRole;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.Arrays;
+import java.util.UUID;
 
 /**
  * Created by Leoko @ dev.skamps.eu on 30.05.2016.
@@ -90,6 +94,9 @@ public class Punishment {
     }
 
     public boolean createChecked(boolean silent) {
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            return submitCreate(silent);
+        }
         if (!validateForCreation()) {
             return false;
         }
@@ -111,6 +118,11 @@ public class Punishment {
     }
 
     private DatabaseManager.PunishmentCreationResult createCommandChecked(boolean silent) {
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            return submitCreate(silent)
+                    ? DatabaseManager.PunishmentCreationResult.created(-1)
+                    : DatabaseManager.PunishmentCreationResult.failed();
+        }
         if (!validateForCreation()) {
             return DatabaseManager.PunishmentCreationResult.failed();
         }
@@ -207,10 +219,16 @@ public class Punishment {
     }
 
     public boolean updateReasonChecked(String reason) {
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            return mi.submitAuthorityRequest(apiRequest(AuthorityRequest.Action.UPDATE_REASON,
+                    Arrays.asList(String.valueOf(id), reason)));
+        }
         if (id == -1 || !DatabaseManager.get().executeStatementChecked(SQLQuery.UPDATE_PUNISHMENT_REASON, reason, id)) {
             return false;
         }
         this.reason = reason;
+        runPostCommit("publish punishment reason update", () ->
+                Universal.get().getMethods().publishPunishmentUpdate(getName(), getUuid()));
         return true;
     }
 
@@ -239,6 +257,11 @@ public class Punishment {
     }
 
     public boolean deleteChecked(String who, boolean massClear, boolean removeCache) {
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            return mi.submitAuthorityRequest(apiRequest(AuthorityRequest.Action.DELETE, Arrays.asList(
+                    String.valueOf(id), who == null ? "" : who,
+                    String.valueOf(massClear), String.valueOf(removeCache))));
+        }
         if (getType() == PunishmentType.KICK) {
             Universal.get().log("!! Failed deleting! You are not able to delete Kicks!");
             return false;
@@ -277,16 +300,36 @@ public class Punishment {
             ids.add(punishment.getId());
         }
 
+        if (Universal.get().getRuntimeRole().isAgent()) {
+            List<String> encodedIds = new ArrayList<>(ids.size() + 2);
+            encodedIds.add(String.valueOf(massClear));
+            encodedIds.add(String.valueOf(removeCache));
+            for (Integer id : ids) {
+                encodedIds.add(String.valueOf(id));
+            }
+            return Universal.get().getMethods().submitAuthorityRequest(new AuthorityRequest(
+                    UUID.randomUUID(), AuthorityRequest.Action.DELETE_ALL,
+                    AuthorityRequest.SenderKind.API, "", who == null ? "" : who, encodedIds));
+        }
+
         if (!DatabaseManager.get().deletePunishmentsAtomically(ids)) {
             return false;
         }
+        boolean publishEach = Universal.get().getRuntimeRole() != RuntimeRole.COORDINATOR_AUTHORITY;
         for (Punishment punishment : punishments) {
-            punishment.completeDeletion(who, massClear, removeCache);
+            punishment.completeDeletion(who, massClear, removeCache, publishEach);
+        }
+        if (!publishEach) {
+            Universal.get().getMethods().publishPunishmentUpdate("", "");
         }
         return true;
     }
 
     private void completeDeletion(String who, boolean massClear, boolean removeCache) {
+        completeDeletion(who, massClear, removeCache, true);
+    }
+
+    private void completeDeletion(String who, boolean massClear, boolean removeCache, boolean publish) {
         if (removeCache) {
             PunishmentManager.get().removeLoadedPunishment(getId());
         }
@@ -302,7 +345,9 @@ public class Punishment {
 
         runPostCommit("log punishment revocation", () -> Universal.get().debug(
                 "Deleted punishment " + getId() + " from " + getName() + " punishment reason: " + getReason()));
-        runPostCommit("publish punishment update", () -> mi.publishPunishmentUpdate(getName(), getUuid()));
+        if (publish) {
+            runPostCommit("publish punishment update", () -> mi.publishPunishmentUpdate(getName(), getUuid()));
+        }
         runPostCommit("call punishment revocation event", () -> mi.callRevokePunishmentEvent(this, massClear));
     }
 
@@ -313,6 +358,18 @@ public class Punishment {
             Universal.get().log("A post-commit action failed while trying to " + action + '.');
             Universal.get().debugException(exception);
         }
+    }
+
+    private boolean submitCreate(boolean requestedSilent) {
+        return mi.submitAuthorityRequest(apiRequest(AuthorityRequest.Action.CREATE, Arrays.asList(
+                getName(), getUuid(), reason == null ? "" : reason, getOperator(), getType().name(),
+                String.valueOf(getEnd()), getCalculation() == null ? "" : getCalculation(),
+                String.valueOf(requestedSilent))));
+    }
+
+    private AuthorityRequest apiRequest(AuthorityRequest.Action action, List<String> values) {
+        return new AuthorityRequest(UUID.randomUUID(), action, AuthorityRequest.SenderKind.API,
+                "", getOperator(), values);
     }
 
     public List<String> getLayout() {
