@@ -3,6 +3,8 @@ package me.leoko.advancedban;
 import me.leoko.advancedban.utils.Command;
 import me.leoko.advancedban.utils.PermissionManifest;
 import me.leoko.advancedban.utils.PunishmentType;
+import me.leoko.advancedban.network.protocol.AuthorityRequest;
+import me.leoko.advancedban.runtime.RuntimeRole;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -98,6 +100,11 @@ class PermissionCompatibilityTest {
         Method release = MethodInterface.class.getMethod("releaseOfflinePermissionPlayer", String.class);
         Method hasOffline = MethodInterface.class.getMethod("hasOfflinePerms", String.class, String.class);
         Method manifestRegistration = MethodInterface.class.getMethod("registerPermissions", Collection.class);
+        Method runtimeRole = MethodInterface.class.getMethod("getRuntimeRole");
+        Method authorityRequest = MethodInterface.class.getMethod(
+                "submitAuthorityRequest", AuthorityRequest.class);
+        Method authorityCommand = MethodInterface.class.getMethod(
+                "submitAuthorityCommand", Object.class, String.class, String[].class);
 
         assertTrue(legacyRegistration.isDefault());
         assertTrue(permissionRegistration.isDefault());
@@ -105,6 +112,11 @@ class PermissionCompatibilityTest {
         assertTrue(release.isDefault());
         assertTrue(hasOffline.isDefault());
         assertTrue(manifestRegistration.isDefault());
+        assertTrue(runtimeRole.isDefault());
+        assertTrue(authorityRequest.isDefault());
+        assertTrue(authorityCommand.isDefault());
+        assertEquals(RuntimeRole.STANDALONE_AUTHORITY,
+                runtimeRole.invoke(new RecordingPermissions(dataFolder, false)));
     }
 
     @Test

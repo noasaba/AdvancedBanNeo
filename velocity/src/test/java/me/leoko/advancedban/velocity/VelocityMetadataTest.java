@@ -19,7 +19,7 @@ class VelocityMetadataTest {
             assertNotNull(reader);
             JsonObject metadata = new JsonParser().parse(reader).getAsJsonObject();
             assertEquals("advancedban", metadata.get("id").getAsString());
-            assertEquals("AdvancedBan", metadata.get("name").getAsString());
+            assertEquals("AdvancedBan Neo", metadata.get("name").getAsString());
             assertEquals(VelocityMain.class.getName(), metadata.get("main").getAsString());
         }
     }
