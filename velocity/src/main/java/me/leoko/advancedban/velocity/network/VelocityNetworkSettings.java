@@ -5,111 +5,78 @@ import me.leoko.advancedban.velocity.YamlConfig;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.FileAttribute;
 import java.security.SecureRandom;
 import java.util.Base64;
-import java.util.Collections;
 import java.util.EnumSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
-/** Coordinator configuration and per-node credentials. */
+/** Always-on Velocity Authority transport using one shared network root secret. */
 public final class VelocityNetworkSettings {
-    private static final String DEFAULT_CONFIG =
-            "# AdvancedBan Neo Authority/Agent transport\n"
-                    + "Enabled: false\n"
-                    + "Authority:\n"
-                    + "  Id: velocity\n"
-                    + "Listen:\n"
-                    + "  Host: 127.0.0.1\n"
-                    + "  Port: 27785\n"
-                    + "Security:\n"
-                    + "  CredentialsDirectory: nodes\n"
-                    + "AllowedNodes: []\n";
+    private static final String DEFAULT_HOST = "127.0.0.1";
+    private static final int DEFAULT_PORT = 27785;
+    private static final String AUTHORITY_ID = "velocity";
 
-    private final boolean enabled;
-    private final String authorityId;
     private final String host;
     private final int port;
-    private final Map<String, byte[]> credentials;
+    private final byte[] credential;
+    private final boolean credentialGenerated;
 
-    private VelocityNetworkSettings(boolean enabled, String authorityId, String host, int port,
-                                    Map<String, byte[]> credentials) {
-        this.enabled = enabled;
-        this.authorityId = authorityId;
+    private VelocityNetworkSettings(String host, int port, byte[] credential,
+                                    boolean credentialGenerated) {
         this.host = host;
         this.port = port;
-        this.credentials = credentials;
+        this.credential = credential.clone();
+        this.credentialGenerated = credentialGenerated;
     }
 
     public static VelocityNetworkSettings load(Path dataDirectory) throws IOException {
         Files.createDirectories(dataDirectory);
         Path dataRoot = dataDirectory.toRealPath();
-        Path configFile = dataRoot.resolve("network.yml");
-        if (!Files.exists(configFile)) {
-            Files.write(configFile, DEFAULT_CONFIG.getBytes(StandardCharsets.UTF_8));
-        }
-        YamlConfig config = YamlConfig.load(configFile);
-        boolean enabled = Boolean.parseBoolean(String.valueOf(value(config, "Enabled", false)));
-        String authorityId = String.valueOf(value(config, "Authority.Id", "velocity")).trim();
-        String host = String.valueOf(value(config, "Listen.Host", "127.0.0.1")).trim();
-        int port = integer(value(config, "Listen.Port", 27785), 27785);
-        String credentialDirectory = String.valueOf(value(
-                config, "Security.CredentialsDirectory", "nodes")).trim();
-
-        if (!authorityId.matches("[A-Za-z0-9_-]{1,64}")) {
-            throw new IOException("Authority.Id is invalid");
+        String host = DEFAULT_HOST;
+        int port = DEFAULT_PORT;
+        Path mainConfig = dataRoot.resolve("config.yml");
+        if (Files.isRegularFile(mainConfig, LinkOption.NOFOLLOW_LINKS)) {
+            YamlConfig config = YamlConfig.load(mainConfig);
+            host = String.valueOf(value(config, "Network.BindHost", DEFAULT_HOST)).trim();
+            port = integer(value(config, "Network.Port", DEFAULT_PORT));
         }
         if (host.isEmpty() || port < 1 || port > 65535) {
-            throw new IOException("Coordinator listen host or port is invalid");
+            throw new IOException("Network BindHost or Port is invalid");
         }
 
-        Path credentialRoot = dataRoot.resolve(credentialDirectory).normalize();
-        if (!credentialRoot.startsWith(dataRoot)) {
-            throw new IOException("CredentialsDirectory must remain inside the plugin directory");
+        Path keyFile = dataRoot.resolve("network.key");
+        boolean generated = false;
+        if (!Files.exists(keyFile, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] secret = new byte[32];
+            new SecureRandom().nextBytes(secret);
+            createCredentialFile(keyFile, (Base64.getEncoder().encodeToString(secret) + "\n")
+                    .getBytes(StandardCharsets.US_ASCII));
+            generated = true;
         }
-        Files.createDirectories(credentialRoot);
-        credentialRoot = credentialRoot.toRealPath();
-        if (!credentialRoot.startsWith(dataRoot)) {
-            throw new IOException("CredentialsDirectory must not resolve outside the plugin directory");
+        if (!Files.isRegularFile(keyFile, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("network.key must be a regular file inside the plugin directory");
         }
-
-        Map<String, byte[]> credentials = new LinkedHashMap<>();
-        List<String> nodes = config.stringList("AllowedNodes");
-        for (String node : nodes) {
-            String nodeId = node.trim();
-            if (!nodeId.matches("[A-Za-z0-9_-]{1,64}")) {
-                throw new IOException("Invalid AllowedNodes entry");
-            }
-            Path keyFile = credentialRoot.resolve(nodeId + ".key");
-            if (!Files.exists(keyFile)) {
-                byte[] generated = new byte[32];
-                new SecureRandom().nextBytes(generated);
-                Files.write(keyFile, (Base64.getEncoder().encodeToString(generated) + "\n")
-                        .getBytes(StandardCharsets.US_ASCII));
-            }
-            keyFile = keyFile.toRealPath();
-            if (!keyFile.startsWith(credentialRoot) || !Files.isRegularFile(keyFile)) {
-                throw new IOException("Credential for node " + nodeId
-                        + " must be a regular file inside CredentialsDirectory");
-            }
-            restrictCredentialPermissions(keyFile);
-            byte[] decoded;
-            try {
-                decoded = Base64.getDecoder().decode(new String(
-                        Files.readAllBytes(keyFile), StandardCharsets.US_ASCII).trim());
-            } catch (IllegalArgumentException exception) {
-                throw new IOException("Invalid credential for node " + nodeId, exception);
-            }
-            if (decoded.length < 32) {
-                throw new IOException("Credential for node " + nodeId + " is shorter than 256 bits");
-            }
-            credentials.put(nodeId, decoded);
+        Path realKey = keyFile.toRealPath();
+        if (!realKey.startsWith(dataRoot)) {
+            throw new IOException("network.key must not resolve outside the plugin directory");
         }
-        return new VelocityNetworkSettings(enabled, authorityId, host, port,
-                Collections.unmodifiableMap(credentials));
+        restrictCredentialPermissions(realKey);
+        byte[] credential;
+        try {
+            credential = Base64.getDecoder().decode(new String(
+                    Files.readAllBytes(realKey), StandardCharsets.US_ASCII).trim());
+        } catch (IllegalArgumentException exception) {
+            throw new IOException("network.key is not valid Base64", exception);
+        }
+        if (credential.length < 32) {
+            throw new IOException("network.key is shorter than 256 bits");
+        }
+        return new VelocityNetworkSettings(host, port, credential, generated);
     }
 
     private static void restrictCredentialPermissions(Path keyFile) throws IOException {
@@ -121,45 +88,56 @@ public final class VelocityNetworkSettings {
         }
     }
 
+    private static void createCredentialFile(Path keyFile, byte[] encoded) throws IOException {
+        boolean created = false;
+        try {
+            try {
+                FileAttribute<java.util.Set<PosixFilePermission>> ownerOnly =
+                        PosixFilePermissions.asFileAttribute(EnumSet.of(
+                                PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+                Files.createFile(keyFile, ownerOnly);
+            } catch (UnsupportedOperationException exception) {
+                Files.createFile(keyFile);
+            }
+            created = true;
+            Files.write(keyFile, encoded, StandardOpenOption.WRITE);
+        } catch (IOException exception) {
+            if (created) {
+                try {
+                    Files.deleteIfExists(keyFile);
+                } catch (IOException cleanup) {
+                    exception.addSuppressed(cleanup);
+                }
+            }
+            throw exception;
+        }
+    }
+
     private static Object value(YamlConfig config, String path, Object fallback) {
         Object result = config.get(path);
         return result == null ? fallback : result;
     }
 
-    private static int integer(Object value, int fallback) {
+    private static int integer(Object value) throws IOException {
         if (value instanceof Number) {
             return ((Number) value).intValue();
         }
         try {
             return Integer.parseInt(String.valueOf(value));
-        } catch (NumberFormatException ignored) {
-            return fallback;
+        } catch (NumberFormatException exception) {
+            throw new IOException("Network Port must be an integer", exception);
         }
     }
 
-    public boolean isEnabled() {
-        return enabled;
-    }
+    public boolean isEnabled() { return true; }
 
-    public String getAuthorityId() {
-        return authorityId;
-    }
+    public String getAuthorityId() { return AUTHORITY_ID; }
 
-    public String getHost() {
-        return host;
-    }
+    public String getHost() { return host; }
 
-    public int getPort() {
-        return port;
-    }
+    public int getPort() { return port; }
 
-    public Map<String, byte[]> getCredentials() {
-        Map<String, byte[]> copy = new LinkedHashMap<>();
-        credentials.forEach((node, key) -> copy.put(node, key.clone()));
-        return copy;
-    }
+    public byte[] getCredential() { return credential.clone(); }
 
-    public boolean isAllowedNode(String nodeId) {
-        return nodeId != null && credentials.containsKey(nodeId);
-    }
+    public boolean wasCredentialGenerated() { return credentialGenerated; }
 }

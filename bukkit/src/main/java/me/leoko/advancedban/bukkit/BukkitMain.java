@@ -49,8 +49,10 @@ public class BukkitMain extends JavaPlugin {
         Universal.get().setup(methods);
         universalInitialized = true;
         if (network.isAgent()) {
+            Universal.get().log("Agent pairing detected; running as a Velocity Agent.");
             if (!network.isValidAgent()) {
                 Universal.get().log("Paper is configured as an Agent but cannot authenticate: " + network.getError());
+                Universal.get().log("Running as degraded Agent; the local punishment database will NOT be started.");
             } else {
                 agentClient = new PaperAgentClient(network);
                 methods.setAgentClient(agentClient);

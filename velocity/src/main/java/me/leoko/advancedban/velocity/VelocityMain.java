@@ -11,7 +11,6 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.velocity.listener.ConnectionListenerVelocity;
-import me.leoko.advancedban.velocity.listener.AgentBackendRoutingListener;
 import me.leoko.advancedban.velocity.listener.PlayerInputListenerVelocity;
 import me.leoko.advancedban.velocity.network.VelocityCoordinatorServer;
 import me.leoko.advancedban.velocity.network.VelocityNetworkSettings;
@@ -44,14 +43,21 @@ public final class VelocityMain {
         try {
             Universal.get().setup(new VelocityMethods(this, proxy, dataDirectory));
             try {
-                coordinator = new VelocityCoordinatorServer(proxy, VelocityNetworkSettings.load(dataDirectory));
+                VelocityNetworkSettings network = VelocityNetworkSettings.load(dataDirectory);
+                Universal.get().log("Running as Velocity Authority.");
+                if (network.wasCredentialGenerated()) {
+                    Universal.get().log("AdvancedBan Neo network key was generated.");
+                    Universal.get().log("Copy network.key to every Paper server that should join this Velocity network.");
+                } else {
+                    Universal.get().log("Network credential loaded.");
+                }
+                coordinator = new VelocityCoordinatorServer(proxy, network);
                 coordinator.start();
             } catch (java.io.IOException exception) {
                 throw new IllegalStateException("Failed to start the Authority transport", exception);
             }
             proxy.getEventManager().register(this, new ConnectionListenerVelocity());
             proxy.getEventManager().register(this, new PlayerInputListenerVelocity());
-            proxy.getEventManager().register(this, new AgentBackendRoutingListener(coordinator));
             initialized = true;
         } catch (RuntimeException | Error exception) {
             if (coordinator != null) {

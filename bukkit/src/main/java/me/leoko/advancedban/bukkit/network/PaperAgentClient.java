@@ -203,6 +203,7 @@ public final class PaperAgentClient implements AutoCloseable {
                 PunishmentManager.get().completeAgentSnapshotSynchronization();
                 Universal.get().updateAgentRole(RuntimeRole.AGENT);
                 established.send(MessageKind.READY, new byte[0]);
+                Universal.get().log("Connected and authenticated with the Velocity Authority.");
                 break;
             case HISTORY_APPEND:
                 PunishmentManager.get().appendAgentHistoryPunishment(

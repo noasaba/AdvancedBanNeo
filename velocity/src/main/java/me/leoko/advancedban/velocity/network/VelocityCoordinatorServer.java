@@ -164,7 +164,7 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
             byte[] encodedHello = readFrameBeforeDeadline(input, socket, 4096, handshakeDeadline);
             long now = System.currentTimeMillis();
             HandshakeProtocol.ClientHello hello = authenticateHello(encodedHello, challenge, now);
-            byte[] credential = settings.getCredentials().get(hello.getNodeId());
+            byte[] credential = settings.getCredential();
             if (!helloReplay.accept(hello.getNodeId(), hello.getNonce(), now,
                     ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS * 2L)) {
                 throw new AuthenticationException(AuthenticationException.Reason.STALE_SEQUENCE);
@@ -235,21 +235,8 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
                                                             HandshakeProtocol.ServerChallenge challenge,
                                                             long nowMillis)
             throws ProtocolException, AuthenticationException {
-        AuthenticationException failure = null;
-        for (Map.Entry<String, byte[]> entry : settings.getCredentials().entrySet()) {
-            try {
-                HandshakeProtocol.ClientHello hello = handshake.decodeAndVerifyClient(encoded, entry.getValue(),
-                        challenge, nowMillis, ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS);
-                if (!entry.getKey().equals(hello.getNodeId())) {
-                    throw new AuthenticationException(AuthenticationException.Reason.SOURCE_MISMATCH);
-                }
-                return hello;
-            } catch (AuthenticationException exception) {
-                failure = exception;
-            }
-        }
-        throw failure == null
-                ? new AuthenticationException(AuthenticationException.Reason.BAD_SIGNATURE) : failure;
+        return handshake.decodeAndVerifyAgent(encoded, settings.getCredential(), challenge,
+                nowMillis, ProtocolConstants.DEFAULT_CLOCK_SKEW_MILLIS);
     }
 
     private void handlePacket(ClientConnection connection, ProtocolPacket packet)
@@ -494,18 +481,14 @@ public final class VelocityCoordinatorServer implements AutoCloseable {
         broadcastHistoryChanges(previousHistory, history);
     }
 
-    /** True only while the configured backend has an authenticated session and ACKed its full active snapshot. */
-    public boolean isAgentReady(String backendServerName) {
-        if (!settings.isEnabled() || backendServerName == null
-                || !settings.isAllowedNode(backendServerName)) {
-            return false;
+    public int getReadyAgentCount() {
+        int ready = 0;
+        for (ClientConnection connection : clients.values()) {
+            if (connection.isReady()) {
+                ready++;
+            }
         }
-        ClientConnection connection = clients.get(backendServerName);
-        return connection != null && connection.isReady();
-    }
-
-    public boolean isAgentRoutingEnforced() {
-        return settings.isEnabled();
+        return ready;
     }
 
     private Map<Long, RuntimePunishment> refreshSnapshot() {
