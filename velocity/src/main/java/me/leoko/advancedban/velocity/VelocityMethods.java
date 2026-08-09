@@ -31,6 +31,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -211,6 +212,15 @@ public final class VelocityMethods implements MethodInterface {
     @Override
     public boolean hasPerms(Object player, String perms) {
         return player instanceof CommandSource && ((CommandSource) player).hasPermission(perms);
+    }
+
+    @Override
+    public void registerPermissions(Collection<String> permissions) {
+        if (!luckPermsAvailable) {
+            return;
+        }
+        CommandSource console = proxy.getConsoleCommandSource();
+        permissions.forEach(console::hasPermission);
     }
 
     @Override

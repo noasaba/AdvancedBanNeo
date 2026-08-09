@@ -3,6 +3,7 @@ package me.leoko.advancedban;
 import com.google.gson.Gson;
 import me.leoko.advancedban.manager.*;
 import me.leoko.advancedban.utils.Command;
+import me.leoko.advancedban.utils.PermissionManifest;
 import me.leoko.advancedban.utils.InterimData;
 import me.leoko.advancedban.utils.Punishment;
 import org.apache.commons.io.FileUtils;
@@ -86,6 +87,7 @@ public class Universal {
                 mi.setCommandExecutor(commandName, command.getPermission(), command.getTabCompleter());
             }
         }
+        mi.registerPermissions(PermissionManifest.getPermissions());
 
         String upt = "You have the newest version";
         String response = getFromURL("https://api.spigotmc.org/legacy/update.php?resource=8695");

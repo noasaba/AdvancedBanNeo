@@ -1,6 +1,8 @@
 package me.leoko.advancedban;
 
 import me.leoko.advancedban.utils.Command;
+import me.leoko.advancedban.utils.PermissionManifest;
+import me.leoko.advancedban.utils.PunishmentType;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,6 +12,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.Collection;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -94,12 +97,50 @@ class PermissionCompatibilityTest {
         Method request = MethodInterface.class.getMethod("requestOfflinePermissionPlayer", String.class);
         Method release = MethodInterface.class.getMethod("releaseOfflinePermissionPlayer", String.class);
         Method hasOffline = MethodInterface.class.getMethod("hasOfflinePerms", String.class, String.class);
+        Method manifestRegistration = MethodInterface.class.getMethod("registerPermissions", Collection.class);
 
         assertTrue(legacyRegistration.isDefault());
         assertTrue(permissionRegistration.isDefault());
         assertTrue(request.isDefault());
         assertTrue(release.isDefault());
         assertTrue(hasOffline.isDefault());
+        assertTrue(manifestRegistration.isDefault());
+    }
+
+    @Test
+    void permissionManifestContainsEveryRuntimeGeneratedNode() {
+        Set<String> permissions = PermissionManifest.getPermissions();
+        assertTrue(permissions.contains("ab.*"));
+        assertTrue(permissions.contains("ab.all"));
+
+        for (Command command : Command.values()) {
+            if (command.getPermission() != null) {
+                assertTrue(permissions.contains(command.getPermission()), command.getPermission());
+            }
+        }
+
+        for (String permission : Arrays.asList(
+                "ab.warns.own", "ab.warns.other", "ab.notes.own", "ab.notes.other",
+                "ab.check.ip", "ab.reload", "ab.help")) {
+            assertTrue(permissions.contains(permission), permission);
+        }
+
+        for (PunishmentType type : PunishmentType.values()) {
+            assertTrue(permissions.contains("ab.notify." + type.getName()));
+            assertTrue(permissions.contains("ab.undoNotify." + type.getBasic().getName()));
+            for (int level = 1; level <= 10; level++) {
+                assertTrue(permissions.contains("ab." + type.getName() + ".exempt." + level));
+                if (type.isTemp()) {
+                    assertTrue(permissions.contains("ab." + type.getName() + ".dur." + level));
+                }
+            }
+            if (type.isTemp()) {
+                assertTrue(permissions.contains("ab." + type.getName() + ".dur.max"));
+            }
+        }
+
+        assertTrue(permissions.contains("ab.note.all"));
+        assertTrue(permissions.contains("ab.Tempban.dur.all"));
     }
 
     private RecordingPermissions install(boolean enableAll, String... granted) throws Exception {

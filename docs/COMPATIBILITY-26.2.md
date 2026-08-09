@@ -39,6 +39,8 @@ A mechanical source extraction found the same 32 literal or template `ab.*` perm
 
 The historical `ab.notes.other` typo continues to authorize the `/warns` completion behavior, while the intended `ab.warns.other` is also accepted. Existing LuckPerms assignments therefore do not need to be changed. Velocity uses the same core permission checks and can optionally query offline users through LuckPerms 5 without making LuckPerms a required dependency.
 
+When LuckPerms is installed on Velocity, AdvancedBan Neo now exposes its complete deterministic permission manifest during proxy startup. This includes command nodes, `ab.*`, optional `.all` nodes, notifications, duration levels, and exemption levels such as `ab.mute.exempt.9`. LuckPerms therefore knows the full tree before an administrator executes each feature for the first time. Registration performs permission checks only; it does not create groups, grant nodes, or alter existing LuckPerms data.
+
 ## Fixed defects
 
 - Replaced regular-expression substitutions in messages and warning actions with literal substitutions, preserving `$`, backslashes, and similar text.
@@ -59,15 +61,16 @@ The historical `ab.notes.other` typo continues to authorize the `/warns` complet
 - Removed all cached copies by database ID and isolated post-commit platform/listener failures from persisted state.
 - Added immediate RedisBungee cache invalidation and an optional shared-MySQL refresh mode for Bungee/Velocity networks.
 - Serialized database-backed cache refreshes with local cache updates so an older Redis/MySQL snapshot cannot overwrite a newer punishment state.
+- Registered the complete Velocity permission surface with LuckPerms at startup, eliminating order-dependent tree discovery and first-use wildcard misses.
 
 ## Automated verification
 
-The normal Java 25 reactor suite passes 43 tests, plus two environment-gated MySQL 8.4 integration tests:
+The normal Java 25 reactor suite passes 45 tests, plus two environment-gated MySQL 8.4 integration tests:
 
-- Core: 33
+- Core: 34
 - Bukkit/Paper: 3
 - BungeeCord: 5
-- Velocity: 2
+- Velocity: 3
 
 The MySQL tests use two independent pools to verify advisory-lock serialization and verify rollback when one row in a batch delete is missing.
 

@@ -6,6 +6,7 @@ import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
 
 import java.io.File;
 import java.io.InputStreamReader;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -165,6 +166,15 @@ public interface MethodInterface {
      * @return the boolean
      */
     boolean hasPerms(Object player, String perms);
+
+    /**
+     * Exposes the complete permission surface to platform permission managers.
+     * Legacy platform adapters may safely ignore this hook.
+     *
+     * @param permissions permission nodes checked by AdvancedBan
+     */
+    default void registerPermissions(Collection<String> permissions) {
+    }
 
     /**
      * Get a Permissionable player that can be checked for offline permissions.
