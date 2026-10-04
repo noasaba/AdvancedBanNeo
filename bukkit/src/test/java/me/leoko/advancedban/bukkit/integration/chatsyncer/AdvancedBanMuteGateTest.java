@@ -11,12 +11,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AdvancedBanMuteGateTest {
 
     @Test
-    void agentWithoutAuthoritySnapshotUsesLastKnownLocalState() {
+    void agentWithoutAuthoritySnapshotFailsClosedWithoutLookingUpStorage() {
         FakeRuntime runtime = new FakeRuntime(true, false);
         MuteGate.Decision decision = new AdvancedBanMuteGate(runtime).evaluate(UUID.randomUUID());
 
-        assertTrue(decision.isAllowed());
-        assertTrue(runtime.lookupCalled);
+        assertFalse(decision.isAllowed());
+        assertTrue(decision.getReason().contains("temporarily locked"));
+        assertFalse(runtime.lookupCalled);
     }
 
     @Test
@@ -47,7 +48,7 @@ class AdvancedBanMuteGateTest {
     }
 
     @Test
-    void runtimeFailureDoesNotLockChat() {
+    void runtimeFailureCannotBecomeAnAgentMuteBypass() {
         AdvancedBanMuteGate.RuntimeAccess failing = new AdvancedBanMuteGate.RuntimeAccess() {
             @Override
             public boolean isAgent() {
@@ -65,7 +66,7 @@ class AdvancedBanMuteGateTest {
             }
         };
 
-        assertTrue(new AdvancedBanMuteGate(failing).evaluate(UUID.randomUUID()).isAllowed());
+        assertFalse(new AdvancedBanMuteGate(failing).evaluate(UUID.randomUUID()).isAllowed());
     }
 
     private static final class FakeRuntime implements AdvancedBanMuteGate.RuntimeAccess {

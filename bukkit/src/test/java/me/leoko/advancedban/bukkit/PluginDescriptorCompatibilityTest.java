@@ -37,6 +37,7 @@ class PluginDescriptorCompatibilityTest {
         assertEquals(Arrays.asList("banip", "ban-ip"), commands.getStringList("ipban.aliases"));
         assertEquals(Arrays.asList("tipban"), commands.getStringList("tempipban.aliases"));
         assertTrue(descriptor.getStringList("softdepend").contains("ChatSyncerChat"));
+        assertTrue(descriptor.getStringList("softdepend").contains("SignedVelocity"));
         assertTrue(descriptor.getStringList("softdepend").contains("floodgate"));
 
         Set<String> descriptorNames = new HashSet<>();

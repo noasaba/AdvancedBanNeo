@@ -9,6 +9,7 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
 import me.leoko.advancedban.Universal;
+import me.leoko.advancedban.compatibility.SignedChatCompatibility;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.velocity.listener.ConnectionListenerVelocity;
 import me.leoko.advancedban.velocity.listener.PlayerInputListenerVelocity;
@@ -26,7 +27,8 @@ import java.nio.file.Path;
         authors = {"Leoko", "nanosize (noasaba)"},
         dependencies = {
                 @Dependency(id = "luckperms", optional = true),
-                @Dependency(id = "floodgate", optional = true)
+                @Dependency(id = "floodgate", optional = true),
+                @Dependency(id = "signedvelocity", optional = true)
         }
 )
 public final class VelocityMain {
@@ -46,6 +48,17 @@ public final class VelocityMain {
         try {
             VelocityMethods methods = new VelocityMethods(this, proxy, dataDirectory);
             Universal.get().setup(methods);
+            String signedVersion = proxy.getPluginManager().getPlugin("signedvelocity")
+                    .filter(container -> container.getInstance().isPresent())
+                    .map(container -> container.getDescription().getVersion().orElse("unknown"))
+                    .orElse(null);
+            String warning = SignedChatCompatibility.warning(signedVersion);
+            if (warning != null) {
+                Universal.get().log("WARNING: " + warning);
+            } else {
+                Universal.get().log("SignedVelocity " + signedVersion
+                        + " detected locally; verify matching Paper installation on EVERY backend.");
+            }
             try {
                 VelocityNetworkSettings network = VelocityNetworkSettings.load(
                         dataDirectory, methods.wasConfigCreated());

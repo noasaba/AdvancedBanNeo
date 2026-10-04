@@ -81,7 +81,7 @@ public final class PaperNetworkSettings {
         defaults.put("CoordinatorHost", DEFAULT_HOST);
         defaults.put("CoordinatorPort", String.valueOf(DEFAULT_PORT));
         defaults.put("KeyFile", DEFAULT_KEY_FILE);
-        defaults.put("FailClosed", "false");
+        defaults.put("FailClosed", "true");
         try {
             NetworkConfigMigrator.ensure(configPath, defaults, Arrays.asList(
                     "Velocity Authority connection. Leave disabled for standalone Paper.",

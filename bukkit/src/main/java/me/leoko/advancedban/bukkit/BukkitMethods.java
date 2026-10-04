@@ -332,6 +332,11 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public boolean callChat(Object player) {
+        if (runtimeRole.isAgent() && agentFailClosed
+                && !PunishmentManager.get().isAgentSnapshotReady()) {
+            sendMessage(player, "§c[AdvancedBan] Authority state unavailable; chat is temporarily locked.");
+            return true;
+        }
         Punishment pnt = PunishmentManager.get().getRuntimeMute(getInternUUID(player));
         if (pnt != null) {
             pnt.getLayout().forEach(str -> sendMessage(player, str));

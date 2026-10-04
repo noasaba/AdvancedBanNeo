@@ -27,7 +27,7 @@ class PaperNetworkSettingsTest {
         assertTrue(generated.contains("  CoordinatorHost: 127.0.0.1"));
         assertTrue(generated.contains("  CoordinatorPort: 27785"));
         assertTrue(generated.contains("  KeyFile: network.key"));
-        assertTrue(generated.contains("  FailClosed: false"));
+        assertTrue(generated.contains("  FailClosed: true"));
         assertTrue(generated.contains("# Velocity Authority connection."));
     }
 
@@ -51,7 +51,7 @@ class PaperNetworkSettingsTest {
 
         assertTrue(settings.isAgent());
         assertTrue(settings.isValidAgent());
-        assertFalse(settings.isFailClosed());
+        assertTrue(settings.isFailClosed());
         assertEquals("127.0.0.1", settings.getHost());
         assertEquals(27785, settings.getPort());
     }

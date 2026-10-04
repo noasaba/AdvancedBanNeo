@@ -2,7 +2,9 @@ package me.leoko.advancedban.bukkit;
 
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.bukkit.integration.chatsyncer.ChatSyncerIntegration;
-import me.leoko.advancedban.bukkit.listener.ChatListener;
+import me.leoko.advancedban.bukkit.listener.ChatListenerRegistrar;
+import me.leoko.advancedban.compatibility.SignedChatCompatibility;
+import org.bukkit.plugin.Plugin;
 import me.leoko.advancedban.bukkit.listener.CommandListener;
 import me.leoko.advancedban.bukkit.listener.ConnectionListener;
 import me.leoko.advancedban.bukkit.listener.InternalListener;
@@ -44,6 +46,21 @@ public class BukkitMain extends JavaPlugin {
 
     private void enablePlugin() {
         PaperNetworkSettings network = PaperNetworkSettings.load(this);
+        if (network.isAgent() && !network.isFailClosed()) {
+            getLogger().warning("Network.FailClosed is false; chat may use stale Agent state during an Authority outage. "
+                    + "Set Network.FailClosed: true to deny chat until the next authenticated snapshot.");
+        }
+        Plugin signed = getServer().getPluginManager().getPlugin("SignedVelocity");
+        if (network.isAgent() || signed != null) {
+            String warning = SignedChatCompatibility.warning(
+                    signed != null && signed.isEnabled() ? signed.getDescription().getVersion() : null);
+            if (warning != null) {
+                getLogger().warning(warning);
+            } else {
+                getLogger().info("SignedVelocity " + signed.getDescription().getVersion()
+                        + " detected locally; verify matching Proxy and EVERY Paper backend.");
+            }
+        }
         BukkitMethods methods = new BukkitMethods(network.isAgent()
                 ? RuntimeRole.AGENT_DEGRADED : RuntimeRole.STANDALONE_AUTHORITY,
                 network.isFailClosed());
@@ -63,7 +80,7 @@ public class BukkitMain extends JavaPlugin {
 
         ConnectionListener connListener = new ConnectionListener();
         this.getServer().getPluginManager().registerEvents(connListener, this);
-        this.getServer().getPluginManager().registerEvents(new ChatListener(), this);
+        registerChatListener();
         this.getServer().getPluginManager().registerEvents(new CommandListener(), this);
         this.getServer().getPluginManager().registerEvents(new InternalListener(), this);
         chatSyncerIntegration = new ChatSyncerIntegration(this);
@@ -78,6 +95,10 @@ public class BukkitMain extends JavaPlugin {
             }
         });
 
+    }
+
+    private void registerChatListener() {
+        ChatListenerRegistrar.register(getServer().getPluginManager(), this, getClass().getClassLoader());
     }
 
     @Override

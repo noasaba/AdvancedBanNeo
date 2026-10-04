@@ -49,13 +49,15 @@ final class AdvancedBanMuteGate implements MuteGate {
         try {
             return evaluateAvailableIdentity(playerId);
         } catch (RuntimeException failure) {
-            // Keep chat usable if the optional integration cannot read the
-            // latest local state. The proxy can still enforce its own state.
-            return Decision.allow();
+            // If runtime identity is unavailable, failing closed is the only safe choice.
+            return Decision.reject("Authority state unavailable; chat is temporarily locked.");
         }
     }
 
     private Decision evaluateAvailableIdentity(UUID playerId) {
+        if (runtime.isAgent() && runtime.isFailClosed() && !runtime.isAgentSnapshotReady()) {
+            return Decision.reject("Authority state unavailable; chat is temporarily locked.");
+        }
         Punishment mute = runtime.getRuntimeMute(playerId.toString().replace("-", ""));
         if (mute == null) {
             return Decision.allow();
