@@ -73,20 +73,25 @@ public class PunishmentManager {
      * @return the interim data
      */
     public InterimData load(String name, String uuid, String ip) {
+        String legacyNameUuid = name == null ? null : name.trim().toLowerCase(Locale.ROOT);
+        boolean hasLegacyNameUuid = legacyNameUuid != null && !legacyNameUuid.isEmpty()
+                && !matches(legacyNameUuid, uuid);
         if (universal().getRuntimeRole().isAgent()) {
             if (!agentSnapshotReady) {
                 return null;
             }
             Set<Punishment> current = new HashSet<>();
             for (Punishment punishment : punishments) {
-                if ((matches(punishment.getUuid(), uuid) || matches(punishment.getUuid(), ip))
+                if ((matches(punishment.getUuid(), uuid) || matches(punishment.getUuid(), ip)
+                        || hasLegacyNameUuid && matches(punishment.getUuid(), legacyNameUuid))
                         && !punishment.isExpired()) {
                     current.add(punishment);
                 }
             }
             Set<Punishment> previous = new HashSet<>();
             for (Punishment punishment : history) {
-                if (matches(punishment.getUuid(), uuid) || matches(punishment.getUuid(), ip)) {
+                if (matches(punishment.getUuid(), uuid) || matches(punishment.getUuid(), ip)
+                        || hasLegacyNameUuid && matches(punishment.getUuid(), legacyNameUuid)) {
                     previous.add(punishment);
                 }
             }
@@ -94,24 +99,43 @@ public class PunishmentManager {
         }
         Set<Punishment> punishments = new HashSet<>();
         Set<Punishment> history = new HashSet<>();
-        try (ResultSet resultsPunishments = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_USER_PUNISHMENTS_WITH_IP, uuid, ip); ResultSet resultsHistory = DatabaseManager.get().executeResultStatement(SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY_WITH_IP, uuid, ip)) {
-            if (resultsHistory == null || resultsPunishments == null)
+        try {
+            if (!loadPunishmentRows(uuid, ip, punishments, history)) {
                 return null;
+            }
+            // Before verified platform UUIDs were available, offline Paper stored the
+            // lowercase player name in the UUID column. Keep those existing records
+            // enforceable after Floodgate supplies its distinct XUID-derived UUID.
+            if (hasLegacyNameUuid && !loadPunishmentRows(legacyNameUuid, legacyNameUuid,
+                    punishments, history)) {
+                return null;
+            }
+        } catch (SQLException ex) {
+            Universal universal = universal();
+            universal.log("An error has occurred loading the punishments from the database.");
+            universal.debugSqlException(ex);
+            return null;
+        }
+        return new InterimData(uuid, name, ip, punishments, history);
+    }
 
+    private boolean loadPunishmentRows(String uuid, String ip, Set<Punishment> punishments,
+                                       Set<Punishment> history) throws SQLException {
+        try (ResultSet resultsPunishments = DatabaseManager.get().executeResultStatement(
+                SQLQuery.SELECT_USER_PUNISHMENTS_WITH_IP, uuid, ip);
+             ResultSet resultsHistory = DatabaseManager.get().executeResultStatement(
+                     SQLQuery.SELECT_USER_PUNISHMENTS_HISTORY_WITH_IP, uuid, ip)) {
+            if (resultsHistory == null || resultsPunishments == null) {
+                return false;
+            }
             while (resultsPunishments.next()) {
                 punishments.add(getPunishmentFromResultSet(resultsPunishments));
             }
             while (resultsHistory.next()) {
                 history.add(getPunishmentFromResultSet(resultsHistory));
             }
-
-        } catch (SQLException ex) {
-        	Universal universal = universal();
-            universal.log("An error has occurred loading the punishments from the database.");
-            universal.debugSqlException(ex);
-            return null;
+            return true;
         }
-        return new InterimData(uuid, name, ip, punishments, history);
     }
 
     private Set<Punishment> loadCurrent(String uuid, String ip) {

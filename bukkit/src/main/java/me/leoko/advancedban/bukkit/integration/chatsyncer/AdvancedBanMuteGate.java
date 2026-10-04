@@ -9,8 +9,6 @@ import java.util.UUID;
 
 /** Reads only AdvancedBan's in-memory runtime state; this class never performs storage access. */
 final class AdvancedBanMuteGate implements MuteGate {
-    private static final String SNAPSHOT_UNAVAILABLE =
-            "AdvancedBan mute state is synchronizing. Please try again shortly.";
     private static final String FALLBACK_MUTE_MESSAGE = "You are muted.";
     private final RuntimeAccess runtime;
 
@@ -24,6 +22,11 @@ final class AdvancedBanMuteGate implements MuteGate {
             @Override
             public boolean isAgentSnapshotReady() {
                 return PunishmentManager.get().isAgentSnapshotReady();
+            }
+
+            @Override
+            public boolean isFailClosed() {
+                return Universal.get().getMethods().isAgentFailClosed();
             }
 
             @Override
@@ -46,18 +49,13 @@ final class AdvancedBanMuteGate implements MuteGate {
         try {
             return evaluateAvailableIdentity(playerId);
         } catch (RuntimeException failure) {
-            // ChatEventBus is fail-open for listener exceptions. Convert an
-            // unexpected runtime-state failure into an explicit rejection so
-            // it cannot become a mute bypass.
-            return Decision.reject(SNAPSHOT_UNAVAILABLE);
+            // Keep chat usable if the optional integration cannot read the
+            // latest local state. The proxy can still enforce its own state.
+            return Decision.allow();
         }
     }
 
     private Decision evaluateAvailableIdentity(UUID playerId) {
-        if (runtime.isAgent() && !runtime.isAgentSnapshotReady()) {
-            return Decision.reject(SNAPSHOT_UNAVAILABLE);
-        }
-
         Punishment mute = runtime.getRuntimeMute(playerId.toString().replace("-", ""));
         if (mute == null) {
             return Decision.allow();
@@ -72,6 +70,7 @@ final class AdvancedBanMuteGate implements MuteGate {
     interface RuntimeAccess {
         boolean isAgent();
         boolean isAgentSnapshotReady();
+        default boolean isFailClosed() { return true; }
         Punishment getRuntimeMute(String uuid);
     }
 }

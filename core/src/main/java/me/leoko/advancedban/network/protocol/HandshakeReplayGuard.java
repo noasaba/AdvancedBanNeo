@@ -9,12 +9,15 @@ public final class HandshakeReplayGuard {
     private static final int MAX_ENTRIES = 4096;
     private final Map<String, Long> seen = new ConcurrentHashMap<>();
 
-    public synchronized boolean accept(String nodeId, byte[] nonce, long nowMillis, long retainMillis) {
-        if (nodeId == null || nodeId.trim().isEmpty() || nodeId.length() > ProtocolConstants.MAX_NODE_ID_BYTES
+    public synchronized boolean accept(String agentIdentity, byte[] nonce, long nowMillis, long retainMillis) {
+        if (agentIdentity == null || agentIdentity.trim().isEmpty()
+                || agentIdentity.length() > ProtocolConstants.MAX_NODE_ID_BYTES
                 || nonce == null || nonce.length < 16 || retainMillis <= 0) {
             return false;
         }
-        String key = nodeId + ':' + Base64.getEncoder().encodeToString(nonce);
+        // A nonce is a network-wide replay token. The claimed Agent UUID is metadata, not a
+        // credential namespace, so changing it must not make a captured nonce reusable.
+        String key = Base64.getEncoder().encodeToString(nonce);
         Long previousExpiry = seen.get(key);
         if (previousExpiry != null && previousExpiry > nowMillis) {
             return false;

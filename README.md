@@ -24,6 +24,10 @@ The legacy-compatible `AdvancedBan-Neo` bundle supports Paper 26.2 and current B
 
 Velocity does not have to be installed and is not injected into an existing BungeeCord setup. Paper-only installations remain standalone Authorities with no new configuration. In a Velocity network, the Velocity artifact can be the sole persistent Authority while the same Paper artifact runs as a DB-less Agent. Agents receive authenticated snapshots and incremental updates over a player-independent connection; Velocity may use either the existing local database or MySQL.
 
+Networking is explicitly controlled by `Network.Enabled` in each platform's existing `config.yml`. Enable it on Velocity to generate/load the external `network.key`, copy that file into each Paper AdvancedBan data folder, then enable it on those Paper servers. A key file alone never changes Paper's role. No `network.yml` is required, and both sides default to `127.0.0.1:27785`.
+
+Geyser/Floodgate logins use the UUID supplied by the platform login event when the proxy, Agent forwarding, or Floodgate API confirms that identity. AdvancedBan Neo also keeps a separate `uuid-cache.properties` file in its own data directory, so names learned from prior logins remain resolvable after restart without changing the punishment database schema. On Paper, install Floodgate on the backend as well when standalone offline-mode UUID lookup needs Floodgate identification; for an AdvancedBan Agent, the forwarded login UUID is used directly.
+
 See [the Authority/Agent guide](docs/AUTHORITY-AGENT.md) for pairing and ChatSyncer setup, and [the 26.2 compatibility report](docs/COMPATIBILITY-26.2.md) for compatibility details.
 
 ## API
@@ -44,7 +48,7 @@ Example Usage from Jitpack:
 <dependency>
   <groupId>com.github.DevLeoko</groupId>
   <artifactId>AdvancedBan</artifactId>
-  <version>v2.3.0</version>
+  <version>2.4.0-beta.1</version>
 </dependency>
 ```
 Note: Jitpack also supports dependencies for gradle!

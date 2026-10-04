@@ -10,6 +10,7 @@ import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.UUIDManager;
 import me.leoko.advancedban.utils.Permissionable;
+import me.leoko.advancedban.utils.FloodgateIdentity;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
 import me.leoko.advancedban.network.protocol.AuthorityRequest;
@@ -24,6 +25,7 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
@@ -61,16 +63,22 @@ public class BukkitMethods implements MethodInterface {
     private YamlConfiguration mysql;
     private BiFunction<OfflinePlayer, String, Boolean> permissionVault;
     private final RuntimeRole runtimeRole;
+    private final boolean agentFailClosed;
     private volatile PaperAgentClient agentClient;
     private final ConcurrentMap<String, CompletionEntry> authorityCompletions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Boolean> pendingCompletions = new ConcurrentHashMap<>();
 
     public BukkitMethods() {
-        this(RuntimeRole.STANDALONE_AUTHORITY);
+        this(RuntimeRole.STANDALONE_AUTHORITY, true);
     }
 
     public BukkitMethods(RuntimeRole runtimeRole) {
+        this(runtimeRole, true);
+    }
+
+    public BukkitMethods(RuntimeRole runtimeRole, boolean agentFailClosed) {
         this.runtimeRole = runtimeRole;
+        this.agentFailClosed = agentFailClosed;
         // Vault support
         if (Bukkit.getServer().getPluginManager().getPlugin("Vault") != null) {
             RegisteredServiceProvider<net.milkbowl.vault.permission.Permission> rsp = Bukkit.getServer().getServicesManager().getRegistration(net.milkbowl.vault.permission.Permission.class);
@@ -81,6 +89,11 @@ public class BukkitMethods implements MethodInterface {
     @Override
     public RuntimeRole getRuntimeRole() {
         return runtimeRole;
+    }
+
+    @Override
+    public boolean isAgentFailClosed() {
+        return agentFailClosed;
     }
 
     public void setAgentClient(PaperAgentClient agentClient) {
@@ -319,10 +332,6 @@ public class BukkitMethods implements MethodInterface {
 
     @Override
     public boolean callChat(Object player) {
-        if (runtimeRole.isAgent() && !PunishmentManager.get().isAgentSnapshotReady()) {
-            sendMessage(player, "§c[AdvancedBan] Authority state unavailable; chat is temporarily locked.");
-            return true;
-        }
         Punishment pnt = PunishmentManager.get().getRuntimeMute(getInternUUID(player));
         if (pnt != null) {
             pnt.getLayout().forEach(str -> sendMessage(player, str));
@@ -335,11 +344,6 @@ public class BukkitMethods implements MethodInterface {
     public boolean callCMD(Object player, String cmd) {
         if (cmd == null || cmd.length() < 2) {
             return false;
-        }
-        if (runtimeRole.isAgent() && !PunishmentManager.get().isAgentSnapshotReady()
-                && Universal.get().isMuteCommand(cmd.substring(1))) {
-            sendMessage(player, "§c[AdvancedBan] Authority state unavailable; muted commands are temporarily locked.");
-            return true;
         }
         Punishment pnt;
         if (Universal.get().isMuteCommand(cmd.substring(1))
@@ -442,6 +446,13 @@ public class BukkitMethods implements MethodInterface {
     @Override
     public boolean isOnlineMode() {
         return callSync(Bukkit::getOnlineMode);
+    }
+
+    @Override
+    public boolean isFloodgatePlayer(UUID uuid) {
+        Plugin floodgate = Bukkit.getPluginManager().getPlugin("floodgate");
+        return floodgate != null
+                && FloodgateIdentity.isFloodgatePlayer(floodgate.getClass().getClassLoader(), uuid);
     }
 
     @Override

@@ -16,13 +16,16 @@ import java.io.StringWriter;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 
@@ -339,11 +342,27 @@ public class Universal {
      * @return the string
      */
     public String callConnection(String name, String ip) {
-        name = name.toLowerCase();
-        if (runtimeRole.isAgent() && !PunishmentManager.get().isAgentSnapshotReady()) {
-            return "[AdvancedBan] Authority state unavailable; login is temporarily locked.";
+        return callConnection(name, ip, null);
+    }
+
+    /**
+     * Checks a login using the UUID supplied by the platform's authenticated login event.
+     * Offline-mode identities keep their legacy name key on both sides of a Velocity
+     * network; online, forwarded, and Floodgate-verified identities use the platform UUID.
+     */
+    public String callConnection(String name, String ip, UUID loginUuid) {
+        String platformName = name;
+        name = name.toLowerCase(Locale.ROOT);
+        boolean forwardedIdentity = runtimeRole.isAgent() && !isOfflineModeUuid(platformName, loginUuid);
+        boolean trustedLoginUuid = loginUuid != null && (forwardedIdentity
+                || UUIDManager.get().isOnlineMode() || mi.isFloodgatePlayer(loginUuid));
+        String uuid;
+        if (trustedLoginUuid) {
+            UUIDManager.get().supplyKnownUUID(name, loginUuid);
+            uuid = loginUuid.toString().replace("-", "");
+        } else {
+            uuid = UUIDManager.get().getUUID(name);
         }
-        String uuid = UUIDManager.get().getUUID(name);
         if (uuid == null) return "[AdvancedBan] Failed to fetch your UUID";
 
         if (ip != null) {
@@ -371,6 +390,11 @@ public class Universal {
         }
 
         return pt.getLayoutBSN();
+    }
+
+    static boolean isOfflineModeUuid(String name, UUID uuid) {
+        return name != null && uuid != null && uuid.equals(UUID.nameUUIDFromBytes(
+                ("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8)));
     }
 
     private boolean mustLockdownOnStorageFailure() {

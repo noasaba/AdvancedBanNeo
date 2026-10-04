@@ -12,6 +12,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -19,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class RuntimeRoleTest {
     @TempDir
@@ -82,8 +85,15 @@ class RuntimeRoleTest {
     }
 
     @Test
-    void degradedAgentRejectsLoginBeforeAnyLocalLookup() {
-        assertEquals("[AdvancedBan] Authority state unavailable; login is temporarily locked.",
+    void degradedAgentDoesNotRejectLoginBecauseAuthorityIsUnavailable() {
+        assertNotEquals("[AdvancedBan] Authority state unavailable; login is temporarily locked.",
+                Universal.get().callConnection("Target", "127.0.0.1"));
+    }
+
+    @Test
+    void degradedAgentDoesNotApplyAuthorityLockWhenFailClosedIsDisabled() throws Exception {
+        methodsField.set(Universal.get(), new FailOpenAgentMethods(dataFolder));
+        assertNotEquals("[AdvancedBan] Authority state unavailable; login is temporarily locked.",
                 Universal.get().callConnection("Target", "127.0.0.1"));
     }
 
@@ -93,6 +103,16 @@ class RuntimeRoleTest {
                 () -> Universal.verifyAuthorityStorage(RuntimeRole.COORDINATOR_AUTHORITY, false));
         Universal.verifyAuthorityStorage(RuntimeRole.COORDINATOR_AUTHORITY, true);
         Universal.verifyAuthorityStorage(RuntimeRole.STANDALONE_AUTHORITY, false);
+    }
+
+    @Test
+    void offlineForwardedUuidPreservesLegacyNameIdentityAcrossAgent() {
+        String username = "E2EPlayer";
+        UUID offlineUuid = UUID.nameUUIDFromBytes(
+                ("OfflinePlayer:" + username).getBytes(StandardCharsets.UTF_8));
+
+        assertTrue(Universal.isOfflineModeUuid(username, offlineUuid));
+        assertFalse(Universal.isOfflineModeUuid(username, UUID.randomUUID()));
     }
 
     private static final class RecordingAgentMethods extends TestMethods {
@@ -108,6 +128,17 @@ class RuntimeRoleTest {
             this.command = command;
             this.arguments = arguments.clone();
             return true;
+        }
+    }
+
+    private static final class FailOpenAgentMethods extends TestMethods {
+        private FailOpenAgentMethods(File dataFolder) {
+            super(dataFolder);
+        }
+
+        @Override
+        public boolean isAgentFailClosed() {
+            return false;
         }
     }
 }
