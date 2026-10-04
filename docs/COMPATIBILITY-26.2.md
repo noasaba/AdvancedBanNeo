@@ -9,7 +9,7 @@ The following 2.3.0 operational resources are byte-for-byte unchanged:
 - `config.yml`, `Messages.yml`, and `Layouts.yml`
 - HSQLDB format, MySQL table names and columns, punishment layouts, and JDBC configuration keys
 
-The Bukkit/Bungee technical plugin name remains `AdvancedBan`, preserving existing dependencies and data folders. Branding metadata identifies the project as AdvancedBan Neo, retains Leoko as original author, and identifies `nanosize (noasaba)` as maintainer. Velocity's display name is `AdvancedBan Neo` while its stable ID remains `advancedban`. Bukkit command and alias declarations remain unchanged; its descriptor has one additive `ChatSyncerChat` soft dependency.
+The Bukkit/Bungee technical plugin name remains `AdvancedBan`, preserving existing dependencies and data folders. Branding metadata identifies the project as AdvancedBan Neo, retains Leoko as original author, and identifies `nanosize (noasaba)` as maintainer. Velocity's display name is `AdvancedBan Neo` while its stable ID remains `advancedban`. Bukkit command and alias declarations remain unchanged; its descriptor has additive `ChatSyncerChat` and `SignedVelocity` soft dependencies.
 
 The public `MethodInterface` methods from 2.3.0 remain callable. The legacy BungeeCord offline-permission provider classes also remain present as deprecated adapters.
 
@@ -136,3 +136,7 @@ These gaps and retained limitations require no command, permission, configuratio
 - [Paper and Minecraft Java requirements](https://docs.papermc.io/paper/getting-started/)
 - [Velocity supported Minecraft versions](https://docs.papermc.io/velocity/server-compatibility/)
 - [Velocity plugin, command, and event development](https://docs.papermc.io/velocity/dev/creating-your-first-plugin/)
+
+## Signed chat follow-up
+
+Modern Paper chat now uses `AsyncChatEvent` while Bukkit retains the legacy fallback. Proxy mute rejection is retained, with SignedVelocity 1.5.0+ on the proxy and all Paper backends as a documented prerequisite for Minecraft 26.2 signed chat. Local diagnostics and automated decision/ordering tests do not prove packet-level runtime compatibility; see [SIGNED-CHAT.md](SIGNED-CHAT.md) for the required acceptance matrix. Earlier runtime results above do not include this follow-up.

@@ -79,6 +79,10 @@ Paper-console commands are accepted only from a node possessing that node's conf
 
 Velocity remains the authority for tab completion and command output. A paired Paper Agent requests completions asynchronously using the Velocity player's identity and permissions, caches the result briefly without blocking the Paper main thread, and returns it on the next completion request. Paper-console commands execute at Velocity and their complete command output is returned to the originating Paper console.
 
+## Signed chat
+
+Modern Velocity networks require matching SignedVelocity Proxy and Paper adapters on **every backend**, even when no AdvancedBan Paper Agent is installed. For the Minecraft 26.2 baseline use 1.5.0 or newer. AdvancedBan keeps proxy mute rejection and Paper degraded-state rejection; SignedVelocity transports the rejection while preserving the signed message chain. See [the signed-chat guide](SIGNED-CHAT.md) for local diagnostics, deployment limits and the acceptance matrix. Agent readiness alone does not establish SignedVelocity health.
+
 ## ChatSyncer 0.2.0-beta.10
 
 If the Paper plugin `ChatSyncerChat` is installed, AdvancedBan Neo automatically obtains the documented public services and installs both:

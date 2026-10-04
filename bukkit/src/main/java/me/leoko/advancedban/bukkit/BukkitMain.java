@@ -3,6 +3,9 @@ package me.leoko.advancedban.bukkit;
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.bukkit.integration.chatsyncer.ChatSyncerIntegration;
 import me.leoko.advancedban.bukkit.listener.ChatListener;
+import me.leoko.advancedban.bukkit.listener.PaperChatListener;
+import me.leoko.advancedban.compatibility.SignedChatCompatibility;
+import org.bukkit.plugin.Plugin;
 import me.leoko.advancedban.bukkit.listener.CommandListener;
 import me.leoko.advancedban.bukkit.listener.ConnectionListener;
 import me.leoko.advancedban.bukkit.listener.InternalListener;
@@ -44,6 +47,17 @@ public class BukkitMain extends JavaPlugin {
 
     private void enablePlugin() {
         PaperNetworkSettings network = PaperNetworkSettings.load(this);
+        Plugin signed = getServer().getPluginManager().getPlugin("SignedVelocity");
+        if (network.isAgent() || signed != null) {
+            String warning = SignedChatCompatibility.warning(
+                    signed != null && signed.isEnabled() ? signed.getDescription().getVersion() : null);
+            if (warning != null) {
+                getLogger().warning(warning);
+            } else {
+                getLogger().info("SignedVelocity " + signed.getDescription().getVersion()
+                        + " detected locally; verify matching Proxy and EVERY Paper backend.");
+            }
+        }
         BukkitMethods methods = new BukkitMethods(network.isAgent()
                 ? RuntimeRole.AGENT_DEGRADED : RuntimeRole.STANDALONE_AUTHORITY);
         Universal.get().setup(methods);
@@ -60,7 +74,7 @@ public class BukkitMain extends JavaPlugin {
 
         ConnectionListener connListener = new ConnectionListener();
         this.getServer().getPluginManager().registerEvents(connListener, this);
-        this.getServer().getPluginManager().registerEvents(new ChatListener(), this);
+        registerChatListener();
         this.getServer().getPluginManager().registerEvents(new CommandListener(), this);
         this.getServer().getPluginManager().registerEvents(new InternalListener(), this);
         chatSyncerIntegration = new ChatSyncerIntegration(this);
@@ -75,6 +89,16 @@ public class BukkitMain extends JavaPlugin {
             }
         });
 
+    }
+
+    private void registerChatListener() {
+        try {
+            Class.forName("io.papermc.paper.event.player.AsyncChatEvent", false, getClass().getClassLoader());
+            getServer().getPluginManager().registerEvents(
+                    new PaperChatListener(), this);
+        } catch (ClassNotFoundException unavailable) {
+            getServer().getPluginManager().registerEvents(new ChatListener(), this);
+        }
     }
 
     @Override

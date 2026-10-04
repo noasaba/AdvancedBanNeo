@@ -9,6 +9,7 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
 import me.leoko.advancedban.Universal;
+import me.leoko.advancedban.compatibility.SignedChatCompatibility;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.velocity.listener.ConnectionListenerVelocity;
 import me.leoko.advancedban.velocity.listener.AgentBackendRoutingListener;
@@ -25,7 +26,7 @@ import java.nio.file.Path;
         description = "AdvancedBan 2.3.0-compatible punishment system maintained as AdvancedBan Neo",
         url = "https://github.com/noasaba/AdvancedBanNeo",
         authors = {"Leoko", "nanosize (noasaba)"},
-        dependencies = {@Dependency(id = "luckperms", optional = true)}
+        dependencies = {@Dependency(id = "luckperms", optional = true), @Dependency(id = "signedvelocity", optional = true)}
 )
 public final class VelocityMain {
     private final ProxyServer proxy;
@@ -43,6 +44,17 @@ public final class VelocityMain {
     public void onInitialize(ProxyInitializeEvent event) {
         try {
             Universal.get().setup(new VelocityMethods(this, proxy, dataDirectory));
+            String signedVersion = proxy.getPluginManager().getPlugin("signedvelocity")
+                    .filter(container -> container.getInstance().isPresent())
+                    .map(container -> container.getDescription().getVersion().orElse("unknown"))
+                    .orElse(null);
+            String warning = SignedChatCompatibility.warning(signedVersion);
+            if (warning != null) {
+                Universal.get().log("WARNING: " + warning);
+            } else {
+                Universal.get().log("SignedVelocity " + signedVersion
+                        + " detected locally; verify matching Paper installation on EVERY backend.");
+            }
             try {
                 coordinator = new VelocityCoordinatorServer(proxy, VelocityNetworkSettings.load(dataDirectory));
                 coordinator.start();
