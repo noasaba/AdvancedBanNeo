@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -90,6 +91,25 @@ class CoreRegressionTest {
         assertNull(assertDoesNotThrow(() -> manager.fromString("zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz")));
         assertEquals("123e4567-e89b-12d3-a456-426614174000",
                 manager.fromString("123e4567e89b12d3a456426614174000").toString());
+    }
+
+    @Test
+    @Order(4)
+    void shouldUseAndPersistVerifiedFloodgateLoginUuid() {
+        UUID bedrockUuid = UUID.fromString("00000000-0000-0000-0009-01fa02c95a2e");
+        methods.setFloodgateUuid(bedrockUuid);
+
+        String result = Universal.get().callConnection(".BedrockPlayer", "192.0.2.12", bedrockUuid);
+
+        assertFalse("[AdvancedBan] Failed to fetch your UUID".equals(result));
+        assertEquals(bedrockUuid.toString().replace("-", ""),
+                UUIDManager.get().getUUID(".BEDROCKPLAYER"));
+
+        UUIDManager restartedCache = new UUIDManager();
+        restartedCache.setup();
+        assertEquals(bedrockUuid.toString().replace("-", ""),
+                restartedCache.getUUID(".bedrockplayer"));
+        methods.setFloodgateUuid(null);
     }
 
     @Test

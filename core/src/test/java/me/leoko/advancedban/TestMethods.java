@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -29,6 +30,7 @@ public class TestMethods implements MethodInterface {
 	private static final List<String> executedCommands = new ArrayList<>();
 	private boolean online;
 	private boolean permissions = true;
+    private UUID floodgateUuid;
 	
     public TestMethods(File dataFolder){
     	this.dataFolder = Objects.requireNonNull(dataFolder);
@@ -304,6 +306,15 @@ public class TestMethods implements MethodInterface {
     @Override
     public boolean isOnlineMode() {
         return false;
+    }
+
+    @Override
+    public boolean isFloodgatePlayer(UUID uuid) {
+        return floodgateUuid != null && floodgateUuid.equals(uuid);
+    }
+
+    public void setFloodgateUuid(UUID uuid) {
+        floodgateUuid = uuid;
     }
 
     @Override

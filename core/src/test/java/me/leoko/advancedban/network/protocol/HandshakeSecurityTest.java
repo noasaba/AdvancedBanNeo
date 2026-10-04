@@ -3,6 +3,7 @@ package me.leoko.advancedban.network.protocol;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -161,7 +162,64 @@ class HandshakeSecurityTest {
         assertTrue(guard.accept("paper-1", nonce, NOW, 1_000L));
         assertFalse(guard.accept("paper-1", nonce, NOW + 999L, 1_000L));
         assertTrue(guard.accept("paper-1", nonce, NOW + 1_000L, 1_000L));
-        assertTrue(guard.accept("paper-2", nonce, NOW + 1_001L, 1_000L));
+        assertFalse(guard.accept("paper-2", nonce, NOW + 1_001L, 1_000L),
+                "changing a non-secret Agent identity must not bypass replay detection");
+    }
+
+    @Test
+    void sharedKeySupportsDistinctInternalAgentUuidsWithoutCrossSessionTrust() throws Exception {
+        UUID firstIdentity = AgentIdentity.generate();
+        UUID secondIdentity = AgentIdentity.generate();
+        assertFalse(firstIdentity.equals(secondIdentity));
+
+        HandshakeProtocol.ServerChallenge firstChallenge = protocol.createServerChallenge("velocity", NOW);
+        HandshakeProtocol.ServerChallenge secondChallenge = protocol.createServerChallenge("velocity", NOW);
+        HandshakeProtocol.ClientHello first = protocol.createClientHello(
+                firstIdentity, NOW, firstChallenge, CREDENTIAL);
+        HandshakeProtocol.ClientHello second = protocol.createClientHello(
+                secondIdentity, NOW, secondChallenge, CREDENTIAL);
+
+        HandshakeProtocol.ClientHello acceptedFirst = protocol.decodeAndVerifyAgent(
+                protocol.encode(first), CREDENTIAL, firstChallenge, NOW, 1_000L);
+        HandshakeProtocol.ClientHello acceptedSecond = protocol.decodeAndVerifyAgent(
+                protocol.encode(second), CREDENTIAL, secondChallenge, NOW, 1_000L);
+        assertEquals(firstIdentity, acceptedFirst.getAgentIdentity());
+        assertEquals(secondIdentity, acceptedSecond.getAgentIdentity());
+
+        UUID sessionId = UUID.randomUUID();
+        byte[] authorityNonce = new byte[32];
+        Arrays.fill(authorityNonce, (byte) 8);
+        byte[] firstKey = SessionKeyDerivation.derive(CREDENTIAL, sessionId, firstIdentity,
+                "velocity", first.getNonce(), authorityNonce);
+        byte[] secondKey = SessionKeyDerivation.derive(CREDENTIAL, sessionId, secondIdentity,
+                "velocity", first.getNonce(), authorityNonce);
+        assertFalse(Arrays.equals(firstKey, secondKey));
+
+        ProtocolSession firstSender = new ProtocolSession(sessionId, firstIdentity.toString(),
+                "velocity", NOW - 1L, NOW + 10_000L, firstKey);
+        ProtocolSession secondReceiver = new ProtocolSession(sessionId, "velocity",
+                secondIdentity.toString(), NOW - 1L, NOW + 10_000L, secondKey);
+        SignedPacket signedByFirst = firstSender.seal(MessageKind.HEARTBEAT, new byte[0], NOW);
+        assertReason(AuthenticationException.Reason.BAD_SIGNATURE,
+                () -> secondReceiver.open(signedByFirst, NOW));
+    }
+
+    @Test
+    void sharedKeyProductionPathRejectsLegacyUserDefinedNodeNames() throws Exception {
+        HandshakeProtocol.ServerChallenge challenge = protocol.createServerChallenge("velocity", NOW);
+        HandshakeProtocol.ClientHello legacy = protocol.createClientHello(
+                "survival", NOW, challenge, CREDENTIAL);
+
+        assertReason(AuthenticationException.Reason.SOURCE_MISMATCH,
+                () -> protocol.decodeAndVerifyAgent(protocol.encode(legacy), CREDENTIAL,
+                        challenge, NOW, 1_000L));
+        assertThrows(IllegalArgumentException.class, () -> AgentIdentity.parse("survival"));
+        assertThrows(IllegalArgumentException.class,
+                () -> AgentIdentity.parse(" " + AgentIdentity.generate() + " "));
+        assertThrows(IllegalArgumentException.class,
+                () -> AgentIdentity.parse(AgentIdentity.generate().toString().toUpperCase(java.util.Locale.ROOT)));
+        assertThrows(IllegalArgumentException.class,
+                () -> AgentIdentity.parse("00000000-0000-0000-0000-000000000000"));
     }
 
     @Test

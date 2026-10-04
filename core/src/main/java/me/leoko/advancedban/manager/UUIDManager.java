@@ -7,6 +7,10 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,7 +21,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class UUIDManager {
     private static UUIDManager instance = null;
     private FetcherMode mode;
+    private boolean onlineMode;
     private final Map<String, String> activeUUIDs = new ConcurrentHashMap<>();
+    private Path cacheFile;
     
     private MethodInterface mi() {
     	return Universal.get().getMethods();
@@ -38,8 +44,9 @@ public class UUIDManager {
      */
     public void setup() {
     	MethodInterface mi = mi();
+        onlineMode = mi.isOnlineMode();
         if (mi.getBoolean(mi.getConfig(), "UUID-Fetcher.Dynamic", true)) {
-            if (!mi.isOnlineMode()) {
+            if (!onlineMode) {
                 mode = FetcherMode.DISABLED;
             } else {
                 if (Universal.get().isBungee()) {
@@ -57,6 +64,13 @@ public class UUIDManager {
                 mode = FetcherMode.RESTFUL;
             }
         }
+        activeUUIDs.clear();
+        cacheFile = mi.getDataFolder().toPath().resolve("uuid-cache.properties");
+        loadKnownUUIDs();
+    }
+
+    public boolean isOnlineMode() {
+        return onlineMode;
     }
 
     /**
@@ -113,7 +127,20 @@ public class UUIDManager {
      */
     public void supplyInternUUID(String name, UUID uuid) {
         if (mode == FetcherMode.INTERN || mode == FetcherMode.MIXED) {
-            activeUUIDs.put(name.toLowerCase(), uuid.toString().replace("-", ""));
+            supplyKnownUUID(name, uuid);
+        }
+    }
+
+    /** Stores a platform-verified login identity regardless of the configured name fetcher. */
+    public void supplyKnownUUID(String name, UUID uuid) {
+        if (name == null || name.trim().isEmpty() || uuid == null) {
+            return;
+        }
+        String key = normalizeName(name);
+        String value = uuid.toString().replace("-", "").toLowerCase(Locale.ROOT);
+        String previous = activeUUIDs.put(key, value);
+        if (!value.equals(previous)) {
+            saveKnownUUIDs();
         }
     }
 
@@ -161,7 +188,7 @@ public class UUIDManager {
      * @return the nonhyphenated uuid or null if not found
      */
     public String getInMemoryUUID(String name) {
-        return activeUUIDs.get(name.toLowerCase());
+        return name == null ? null : activeUUIDs.get(normalizeName(name));
     }
 
     /**
@@ -227,7 +254,7 @@ public class UUIDManager {
 
     private String askAPI(String url, String name, String key) throws IOException {
     	MethodInterface mi = mi();
-        name = name.toLowerCase();
+        name = normalizeName(name);
         HttpURLConnection request = (HttpURLConnection) new URL(url.replaceAll("%NAME%", name).replaceAll("%TIMESTAMP%", new Date().getTime() + "")).openConnection();
         request.setConnectTimeout(Universal.HTTP_TIMEOUT_MILLIS);
         request.setReadTimeout(Universal.HTTP_TIMEOUT_MILLIS);
@@ -241,8 +268,62 @@ public class UUIDManager {
             System.out.println("!! Response: " + request.getResponseMessage());
         } else {
             activeUUIDs.put(name, uuid);
+            saveKnownUUIDs();
         }
         return uuid;
+    }
+
+    private static String normalizeName(String name) {
+        return name.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private void loadKnownUUIDs() {
+        if (cacheFile == null || !Files.isRegularFile(cacheFile)) {
+            return;
+        }
+        Properties properties = new Properties();
+        try (java.io.InputStream input = Files.newInputStream(cacheFile)) {
+            properties.load(input);
+            for (String name : properties.stringPropertyNames()) {
+                String uuid = properties.getProperty(name);
+                if (!name.trim().isEmpty() && fromString(uuid) != null) {
+                    activeUUIDs.put(normalizeName(name), uuid.replace("-", "").toLowerCase(Locale.ROOT));
+                }
+            }
+        } catch (IOException exception) {
+            mi().log("Could not read the saved player UUID cache; online UUID lookup will continue.");
+        }
+    }
+
+    private synchronized void saveKnownUUIDs() {
+        if (cacheFile == null) {
+            return;
+        }
+        Path temporary = null;
+        try {
+            Files.createDirectories(cacheFile.getParent());
+            Properties properties = new Properties();
+            properties.putAll(activeUUIDs);
+            temporary = Files.createTempFile(cacheFile.getParent(), "uuid-cache", ".tmp");
+            try (java.io.OutputStream output = Files.newOutputStream(temporary)) {
+                properties.store(output, "AdvancedBan Neo known player UUIDs");
+            }
+            try {
+                Files.move(temporary, cacheFile, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(temporary, cacheFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException exception) {
+            mi().log("Could not save the player UUID cache; current-session UUID lookup remains available.");
+        } finally {
+            if (temporary != null) {
+                try {
+                    Files.deleteIfExists(temporary);
+                } catch (IOException ignored) {
+                }
+            }
+        }
     }
 
     /**

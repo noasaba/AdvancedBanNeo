@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,58 +17,123 @@ class PaperNetworkSettingsTest {
     Path dataDirectory;
 
     @Test
-    void missingNetworkConfigurationRemainsStandalone() {
+    void newConfigurationIsExplicitlyDisabledAndCommented() throws Exception {
         PaperNetworkSettings settings = PaperNetworkSettings.load(dataDirectory.toFile());
+        String generated = configText();
+
         assertFalse(settings.isAgent());
+        assertTrue(generated.contains("Network:"));
+        assertTrue(generated.contains("  Enabled: false"));
+        assertTrue(generated.contains("  CoordinatorHost: 127.0.0.1"));
+        assertTrue(generated.contains("  CoordinatorPort: 27785"));
+        assertTrue(generated.contains("  KeyFile: network.key"));
+        assertTrue(generated.contains("  FailClosed: true"));
+        assertTrue(generated.contains("# Velocity Authority connection."));
     }
 
     @Test
-    void pairedConfigurationRemainsAgentEvenWhenAuthorityIsUnavailable() throws Exception {
-        byte[] credential = new byte[32];
-        Files.write(dataDirectory.resolve("network.key"),
-                Base64.getEncoder().encode(credential));
-        Files.write(dataDirectory.resolve("network.yml"), (
-                "Mode: AGENT\n"
-                        + "Node:\n  Id: survival\n"
-                        + "Coordinator:\n  Host: 127.0.0.1\n  Port: 27785\n"
-                        + "Security:\n  KeyFile: network.key\n")
-                .getBytes(StandardCharsets.UTF_8));
+    void disabledConfigurationIgnoresExistingKeyAndRemainsStandalone() throws Exception {
+        writeConfig("Network:\n  Enabled: false\n");
+        writeKey(dataDirectory.resolve("network.key"), new byte[32]);
 
         PaperNetworkSettings settings = PaperNetworkSettings.load(dataDirectory.toFile());
+
+        assertFalse(settings.isAgent());
+        assertFalse(Files.exists(dataDirectory.resolve("agent.id")));
+    }
+
+    @Test
+    void enabledConfigurationSelectsAgentAndUsesDefaults() throws Exception {
+        writeConfig("Network:\n  Enabled: true\n");
+        writeKey(dataDirectory.resolve("network.key"), new byte[32]);
+
+        PaperNetworkSettings settings = PaperNetworkSettings.load(dataDirectory.toFile());
+
         assertTrue(settings.isAgent());
         assertTrue(settings.isValidAgent());
+        assertTrue(settings.isFailClosed());
+        assertEquals("127.0.0.1", settings.getHost());
+        assertEquals(27785, settings.getPort());
     }
 
     @Test
-    void missingCredentialFailsClosedAsAgent() throws Exception {
-        Files.write(dataDirectory.resolve("network.yml"), (
-                "Mode: AGENT\nNode:\n  Id: survival\n")
-                .getBytes(StandardCharsets.UTF_8));
+    void enabledAgentUsesRelativeCustomKeyAndConfiguredEndpoint() throws Exception {
+        writeConfig("Network:\n"
+                + "  Enabled: true\n"
+                + "  CoordinatorHost: authority.internal\n"
+                + "  CoordinatorPort: 28785\n"
+                + "  KeyFile: secrets/network.key\n"
+                + "  FailClosed: false\n");
+        Files.createDirectories(dataDirectory.resolve("secrets"));
+        writeKey(dataDirectory.resolve("secrets/network.key"), new byte[32]);
 
         PaperNetworkSettings settings = PaperNetworkSettings.load(dataDirectory.toFile());
-        assertTrue(settings.isAgent());
-        assertFalse(settings.isValidAgent());
+
+        assertTrue(settings.isValidAgent());
+        assertFalse(settings.isFailClosed());
+        assertEquals("authority.internal", settings.getHost());
+        assertEquals(28785, settings.getPort());
     }
 
     @Test
-    void persistedPairingNeverFallsBackToStandaloneAfterConfigurationLoss() throws Exception {
-        Files.write(dataDirectory.resolve("custom.key"), Base64.getEncoder().encode(new byte[32]));
-        Files.write(dataDirectory.resolve("network.yml"), (
-                "Mode: AGENT\nNode:\n  Id: survival\n"
-                        + "Security:\n  KeyFile: custom.key\n")
-                .getBytes(StandardCharsets.UTF_8));
-        assertTrue(PaperNetworkSettings.load(dataDirectory.toFile()).isValidAgent());
+    void legacyConfigurationMigratesOnceFromPreviousPairingState() throws Exception {
+        writeConfig("Debug: false\n");
+        writeKey(dataDirectory.resolve("network.key"), new byte[32]);
 
-        Files.delete(dataDirectory.resolve("network.yml"));
-        Files.delete(dataDirectory.resolve("custom.key"));
-        PaperNetworkSettings missing = PaperNetworkSettings.load(dataDirectory.toFile());
-        assertTrue(missing.isAgent());
-        assertFalse(missing.isValidAgent());
+        PaperNetworkSettings first = PaperNetworkSettings.load(dataDirectory.toFile());
+        String migrated = configText();
+        PaperNetworkSettings second = PaperNetworkSettings.load(dataDirectory.toFile());
 
-        Files.write(dataDirectory.resolve("network.yml"), "Mode: STANDALONE\n"
-                .getBytes(StandardCharsets.UTF_8));
-        PaperNetworkSettings downgraded = PaperNetworkSettings.load(dataDirectory.toFile());
-        assertTrue(downgraded.isAgent());
-        assertFalse(downgraded.isValidAgent());
+        assertTrue(first.isValidAgent());
+        assertTrue(second.isValidAgent());
+        assertTrue(migrated.contains("  Enabled: true"));
+        assertEquals(migrated, configText());
+    }
+
+    @Test
+    void legacyUnpairedConfigurationMigratesToDisabled() throws Exception {
+        writeConfig("Debug: false\n");
+
+        PaperNetworkSettings settings = PaperNetworkSettings.load(dataDirectory.toFile());
+
+        assertFalse(settings.isAgent());
+        assertTrue(configText().contains("  Enabled: false"));
+    }
+
+    @Test
+    void existingNetworkValuesAndCommentsAreNotOverwritten() throws Exception {
+        writeConfig("# keep me\nNetwork:\n"
+                + "  Enabled: false\n"
+                + "  CoordinatorHost: custom.example\n");
+        PaperNetworkSettings.load(dataDirectory.toFile());
+        String migrated = configText();
+
+        assertTrue(migrated.contains("# keep me"));
+        assertTrue(migrated.contains("  Enabled: false"));
+        assertTrue(migrated.contains("  CoordinatorHost: custom.example"));
+    }
+
+    @Test
+    void generatedInternalAgentIdentityIsStable() throws Exception {
+        writeConfig("Network:\n  Enabled: true\n");
+        writeKey(dataDirectory.resolve("network.key"), new byte[32]);
+
+        String first = PaperNetworkSettings.load(dataDirectory.toFile()).getNodeId();
+        String second = PaperNetworkSettings.load(dataDirectory.toFile()).getNodeId();
+
+        assertEquals(first, second);
+        assertEquals(first, java.util.UUID.fromString(first).toString());
+    }
+
+    private void writeConfig(String value) throws Exception {
+        Files.write(dataDirectory.resolve("config.yml"), value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void writeKey(Path path, byte[] credential) throws Exception {
+        Files.write(path, Base64.getEncoder().encode(credential));
+    }
+
+    private String configText() throws Exception {
+        return new String(Files.readAllBytes(dataDirectory.resolve("config.yml")), StandardCharsets.UTF_8);
     }
 }

@@ -1,8 +1,8 @@
-# Minecraft 26.2 and AdvancedBan 2.3.0 compatibility report
+# Minecraft 26.2 and AdvancedBan Neo 2.4.0-beta.1 compatibility report
 
 ## Scope and compatibility baseline
 
-The compatibility baseline is AdvancedBan 2.3.0 at commit `69f3edabfd2f16a181e4c3b4958f3ad2bc3eaabc`. The implementation deliberately keeps the public version at 2.3.0 and avoids migration steps for existing installations.
+The compatibility baseline is AdvancedBan 2.3.0 at commit `69f3edabfd2f16a181e4c3b4958f3ad2bc3eaabc`. AdvancedBan Neo is versioned as `2.4.0-beta.1`; existing installations still require no conversion of their configuration, messages, layouts, permissions, or storage.
 
 The following 2.3.0 operational resources are byte-for-byte unchanged:
 
@@ -64,30 +64,32 @@ When LuckPerms is installed on Velocity, AdvancedBan Neo now exposes its complet
 - Serialized database-backed cache refreshes with local cache updates so an older Redis/MySQL snapshot cannot overwrite a newer punishment state.
 - Registered the complete Velocity permission surface with LuckPerms at startup, eliminating order-dependent tree discovery and first-use wildcard misses.
 - Added explicit Standalone Authority, Coordinator Authority, Agent, and Degraded Agent roles without changing standalone defaults.
-- Added a player-independent authenticated Velocity/Paper transport with per-node credentials, HMAC-SHA-256, fresh nonces, session keys, target/source checks, monotonic sequences, replay rejection, reconnect snapshots, and idempotent mutation request IDs.
+- Added a player-independent authenticated Velocity/Paper transport with one explicitly shared external credential, HMAC-SHA-256, fresh nonces, session keys, target/source checks, monotonic sequences, replay rejection, reconnect snapshots, and idempotent mutation request IDs.
 - Prevented Paper Agents from initializing or accessing punishment databases and delegated built-in commands and legacy mutation APIs to Velocity without local fallback.
 - Added optional ChatSyncer ChatEventBus and vNext pre-send gates backed only by the thread-safe in-memory mute view.
-- Persisted Paper pairing state so missing configuration cannot create a second Authority.
+- Made `Network.Enabled` the explicit source of truth: disabled Paper remains standalone even with a key, enabled Paper is an Agent, and Velocity listens only while enabled.
+- Persisted Paper pairing state so a missing key cannot create a second Authority.
 - Added heartbeat deadlines, handshake cleanup, bounded asynchronous writers, and per-node atomic request idempotency.
 - Made Agent snapshot replacement atomic and removed the login/revoke race that could resurrect stale punishments.
 - Made ChatSyncer registration all-or-nothing, excluded Discord/system origins, and prevented duplicate chat feedback.
 - Coalesced Coordinator bulk revocations into one snapshot diff/broadcast instead of rescanning the full punishment table for every deleted row.
 - Bound the Agent handshake to a server-first random challenge and made readiness require complete active and history snapshots.
-- Added fail-closed Velocity backend routing keyed by the authenticated Paper `Node.Id`, authenticated-inbound liveness tracking, and reconnect-safe full state restoration.
+- Added authenticated-inbound Agent liveness tracking and reconnect-safe full state restoration. With shared-key automatic pairing, Velocity keeps global enforcement active while a disconnected Paper Agent continues from its last received state without locking players out; backend-name routing is not inferred from the Agent's internal UUID.
 - Returned Authority command output to the originating Paper console and added non-blocking Authority-backed Paper tab completion.
 - Synchronized historical rows for DB-less Agents so legacy history/note/warn reads do not regain database access.
 - Made Velocity Authority database initialization and snapshot reads fail closed instead of starting with an empty authoritative state.
+- Added Geyser/Floodgate-aware login UUID resolution and a separate persistent name-to-UUID cache, without changing the punishment database schema.
 
 ## Automated verification
 
-The final Java 25 reactor suite runs 126 tests. All 126 pass, including the MySQL 8.4 integration tests:
+The current Java 25 reactor run executed 149 test cases: 147 passed, with zero failures or errors. Two MySQL integration cases were skipped because no MySQL service was configured in this run:
 
-- Core: 89
-- Bukkit/Paper: 19
+- Core: 97 (including the two skipped MySQL integration cases)
+- Bukkit/Paper: 31
 - BungeeCord: 5
-- Velocity: 13
+- Velocity: 16
 
-The MySQL tests use two independent pools to verify advisory-lock serialization and verify rollback when one row in a batch delete is missing. The final run had zero failures, zero errors, and zero skipped tests. Artifact verification also confirmed descriptors, Java 8/25 bytecode boundaries, database drivers, relocation, and optional API isolation.
+The MySQL tests use two independent pools to verify advisory-lock serialization and rollback when one row in a batch delete is missing; run them with a configured MySQL 8.4 service. Artifact verification also confirmed descriptors, Java 8/25 bytecode boundaries, database drivers, relocation, and optional API isolation.
 
 The generated legacy bundle contains the Bukkit and Bungee descriptors, both database drivers, and only Java 8-compatible classes. The separate self-contained Velocity artifact contains `velocity-plugin.json` and the same storage implementation. CI builds with Java 25, runs `clean verify`, and publishes both artifacts using current GitHub Actions versions. The release workflow's separate Javadoc phase is also reproducible from reactor-installed artifacts.
 
@@ -102,6 +104,8 @@ Velocity support is optional. Install the artifact for the platform responsible 
 
 Detailed pairing, credential rotation, DB placement, degraded behavior, and ChatSyncer operation are documented in [the Authority/Agent guide](AUTHORITY-AGENT.md).
 
+Authority/Agent networking requires no separate `network.yml`. Set `Network.Enabled: true` explicitly on both sides and keep the shared secret in the external relative `KeyFile`. Both sides default to `127.0.0.1:27785`; deployments needing a different address use `Network.BindHost` / `Network.Port` on Velocity and `Network.CoordinatorHost` / `Network.CoordinatorPort` on Paper.
+
 For multiple proxy instances, point each instance at the same MySQL database. RedisBungee-enabled Bungee instances invalidate one another immediately. For multi-Velocity networks, or a Bungee/Velocity transition where both proxy types are live, add the following optional key to each proxy's existing `config.yml`:
 
 ```yaml
@@ -114,10 +118,10 @@ The value is the refresh interval in seconds. It is disabled when absent or `0`,
 
 The following combinations were not available for full end-to-end automation and are not claimed as completed:
 
-- A real Minecraft 26.2 client login/chat session. The available Mineflayer release rejected protocol `26.2` before connecting; proxy and backend startup were verified independently.
+- Live E2E was run with Paper 26.2 build 129, Velocity 4.1.0, Floodgate 2.2.5, Geyser 2.11.3, and the release bundle/Velocity artifacts. A 26.2 Java client connected through Velocity modern forwarding to a Paper Agent; the Agent authenticated, `/check` preserved the permission-denied response, an Agent-issued `/note` was visible in Velocity history, and an Agent-issued `/ban` kicked the online player and rejected the next login. After restarting Velocity, the same BAN was still enforced from its local HSQLDB. Geyser/Floodgate both loaded and Geyser bound its UDP listener with Floodgate authentication configured. A real Bedrock/Xbox-authenticated client login was not available, so Floodgate's Bedrock identity path is not claimed as live-client verified.
 - Live LuckPerms offline-user resolution on Velocity and a LuckPerms-only `ab.*` test server.
 - A live RedisBungee/Velocity mixed network and CloudNet v2/v3. Shared-MySQL locking and rollback are covered with MySQL 8.4 integration tests, but multi-process player E2E remains manual.
-- The production Paper 26.2 and Velocity processes were run together over the configured TCP transport. Paper remained DB-less, delegated console commands, received Authority results, enforced expiry, and restored an Authority-side punishment created while it was disconnected after reconnect.
+- MySQL 8.4 backed multi-process synchronization and a real Bedrock/Xbox client session remain unverified in this local E2E run.
 - An unmodified existing AdvancedBan 2.3.0 HSQLDB data set was opened on Paper 26.2, read, mutated, restarted, and read again without conversion.
 - ChatSyncer `0.2.0-beta.10` runtime validation. That artifact was not available in the workspace or public repositories; the supplied beta.10 API contract matches the available beta.2 source/JAR and is covered by a public-API fixture, but a beta.10 server must still be smoke-tested when the artifact is supplied.
 - Third-party plugin binary tests beyond reflection checks of the 2.3.0 public compatibility surface.

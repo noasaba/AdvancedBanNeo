@@ -28,7 +28,9 @@ public class ConnectionListenerBungee implements Listener {
         event.registerIntent((BungeeMain)Universal.get().getMethods().getPlugin());
         Universal.get().getMethods().runAsync(() -> {
             try {
-                String result = Universal.get().callConnection(event.getConnection().getName(), event.getConnection().getAddress().getAddress().getHostAddress());
+                String result = Universal.get().callConnection(event.getConnection().getName(),
+                        event.getConnection().getAddress().getAddress().getHostAddress(),
+                        event.getConnection().getUniqueId());
 
                 if (result != null) {
                     // Always deny this proxy login first. CloudNet is only needed to

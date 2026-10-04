@@ -12,7 +12,6 @@ import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.compatibility.SignedChatCompatibility;
 import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.velocity.listener.ConnectionListenerVelocity;
-import me.leoko.advancedban.velocity.listener.AgentBackendRoutingListener;
 import me.leoko.advancedban.velocity.listener.PlayerInputListenerVelocity;
 import me.leoko.advancedban.velocity.network.VelocityCoordinatorServer;
 import me.leoko.advancedban.velocity.network.VelocityNetworkSettings;
@@ -22,11 +21,15 @@ import java.nio.file.Path;
 @Plugin(
         id = "advancedban",
         name = "AdvancedBan Neo",
-        version = "2.3.0",
+        version = "2.4.0-beta.1",
         description = "AdvancedBan 2.3.0-compatible punishment system maintained as AdvancedBan Neo",
         url = "https://github.com/noasaba/AdvancedBanNeo",
         authors = {"Leoko", "nanosize (noasaba)"},
-        dependencies = {@Dependency(id = "luckperms", optional = true), @Dependency(id = "signedvelocity", optional = true)}
+        dependencies = {
+                @Dependency(id = "luckperms", optional = true),
+                @Dependency(id = "floodgate", optional = true),
+                @Dependency(id = "signedvelocity", optional = true)
+        }
 )
 public final class VelocityMain {
     private final ProxyServer proxy;
@@ -43,7 +46,8 @@ public final class VelocityMain {
     @Subscribe
     public void onInitialize(ProxyInitializeEvent event) {
         try {
-            Universal.get().setup(new VelocityMethods(this, proxy, dataDirectory));
+            VelocityMethods methods = new VelocityMethods(this, proxy, dataDirectory);
+            Universal.get().setup(methods);
             String signedVersion = proxy.getPluginManager().getPlugin("signedvelocity")
                     .filter(container -> container.getInstance().isPresent())
                     .map(container -> container.getDescription().getVersion().orElse("unknown"))
@@ -56,14 +60,26 @@ public final class VelocityMain {
                         + " detected locally; verify matching Paper installation on EVERY backend.");
             }
             try {
-                coordinator = new VelocityCoordinatorServer(proxy, VelocityNetworkSettings.load(dataDirectory));
+                VelocityNetworkSettings network = VelocityNetworkSettings.load(
+                        dataDirectory, methods.wasConfigCreated());
+                Universal.get().log("Running as Velocity Authority.");
+                if (!network.isEnabled()) {
+                    Universal.get().log("Paper Agent transport is disabled by Network.Enabled.");
+                } else {
+                    if (network.wasCredentialGenerated()) {
+                        Universal.get().log("AdvancedBan Neo network key was generated.");
+                        Universal.get().log("Copy the configured KeyFile to every enabled Paper Agent.");
+                    } else {
+                        Universal.get().log("Network credential loaded.");
+                    }
+                }
+                coordinator = new VelocityCoordinatorServer(proxy, network);
                 coordinator.start();
             } catch (java.io.IOException exception) {
                 throw new IllegalStateException("Failed to start the Authority transport", exception);
             }
             proxy.getEventManager().register(this, new ConnectionListenerVelocity());
             proxy.getEventManager().register(this, new PlayerInputListenerVelocity());
-            proxy.getEventManager().register(this, new AgentBackendRoutingListener(coordinator));
             initialized = true;
         } catch (RuntimeException | Error exception) {
             if (coordinator != null) {

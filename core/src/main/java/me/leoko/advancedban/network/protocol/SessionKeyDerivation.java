@@ -39,6 +39,13 @@ public final class SessionKeyDerivation {
         }
     }
 
+    /** Derives a key while binding it to the canonical internal Agent UUID. */
+    public static byte[] derive(byte[] networkCredential, UUID sessionId, UUID agentIdentity,
+                                String authorityNode, byte[] agentNonce, byte[] authorityNonce) {
+        return derive(networkCredential, sessionId, AgentIdentity.encode(agentIdentity), authorityNode,
+                agentNonce, authorityNonce);
+    }
+
     private static void requireNonce(byte[] nonce, String name) {
         Objects.requireNonNull(nonce, name);
         if (nonce.length < 16) {

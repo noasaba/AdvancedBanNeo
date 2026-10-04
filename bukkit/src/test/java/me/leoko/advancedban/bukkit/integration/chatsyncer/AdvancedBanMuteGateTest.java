@@ -16,7 +16,7 @@ class AdvancedBanMuteGateTest {
         MuteGate.Decision decision = new AdvancedBanMuteGate(runtime).evaluate(UUID.randomUUID());
 
         assertFalse(decision.isAllowed());
-        assertTrue(decision.getReason().contains("synchronizing"));
+        assertTrue(decision.getReason().contains("temporarily locked"));
         assertFalse(runtime.lookupCalled);
     }
 
@@ -32,6 +32,15 @@ class AdvancedBanMuteGateTest {
     }
 
     @Test
+    void agentWithoutSnapshotAllowsWhenFailClosedIsExplicitlyDisabled() {
+        FakeRuntime runtime = new FakeRuntime(true, false, false);
+        MuteGate.Decision decision = new AdvancedBanMuteGate(runtime).evaluate(UUID.randomUUID());
+
+        assertTrue(decision.isAllowed());
+        assertTrue(runtime.lookupCalled);
+    }
+
+    @Test
     void nullIdentityIsAllowedWithoutConsultingRuntimeState() {
         FakeRuntime runtime = new FakeRuntime(true, false);
         assertTrue(new AdvancedBanMuteGate(runtime).evaluate(null).isAllowed());
@@ -39,7 +48,7 @@ class AdvancedBanMuteGateTest {
     }
 
     @Test
-    void runtimeFailureCannotBecomeAChatEventBusMuteBypass() {
+    void runtimeFailureCannotBecomeAnAgentMuteBypass() {
         AdvancedBanMuteGate.RuntimeAccess failing = new AdvancedBanMuteGate.RuntimeAccess() {
             @Override
             public boolean isAgent() {
@@ -53,7 +62,7 @@ class AdvancedBanMuteGateTest {
 
             @Override
             public Punishment getRuntimeMute(String uuid) {
-                return null;
+                throw new IllegalStateException("fixture failure");
             }
         };
 
@@ -63,12 +72,18 @@ class AdvancedBanMuteGateTest {
     private static final class FakeRuntime implements AdvancedBanMuteGate.RuntimeAccess {
         private final boolean agent;
         private final boolean snapshotReady;
+        private final boolean failClosed;
         private boolean lookupCalled;
         private String lastUuid;
 
         private FakeRuntime(boolean agent, boolean snapshotReady) {
+            this(agent, snapshotReady, true);
+        }
+
+        private FakeRuntime(boolean agent, boolean snapshotReady, boolean failClosed) {
             this.agent = agent;
             this.snapshotReady = snapshotReady;
+            this.failClosed = failClosed;
         }
 
         @Override
@@ -79,6 +94,11 @@ class AdvancedBanMuteGateTest {
         @Override
         public boolean isAgentSnapshotReady() {
             return snapshotReady;
+        }
+
+        @Override
+        public boolean isFailClosed() {
+            return failClosed;
         }
 
         @Override

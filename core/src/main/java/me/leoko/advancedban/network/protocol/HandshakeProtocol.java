@@ -68,6 +68,11 @@ public final class HandshakeProtocol {
         return new ClientHello(nodeId, timestampMillis, nonce, HmacSha256.sign(credential, unsigned));
     }
 
+    /** Creates a hello for an automatically generated, non-secret Agent UUID. */
+    public ClientHello createClientHello(UUID agentIdentity, long timestampMillis, byte[] credential) {
+        return createClientHello(AgentIdentity.encode(agentIdentity), timestampMillis, credential);
+    }
+
     /** Creates a client hello cryptographically bound to the current server challenge. */
     public ClientHello createClientHello(String nodeId, long timestampMillis,
                                          ServerChallenge challenge, byte[] credential) {
@@ -76,6 +81,12 @@ public final class HandshakeProtocol {
         byte[] unsigned = encodeClientUnsigned(nodeId, timestampMillis, nonce);
         return new ClientHello(nodeId, timestampMillis, nonce,
                 HmacSha256.sign(credential, appendContext(unsigned, encode(challenge))));
+    }
+
+    /** Creates a challenge-bound hello for an automatically generated Agent UUID. */
+    public ClientHello createClientHello(UUID agentIdentity, long timestampMillis,
+                                         ServerChallenge challenge, byte[] credential) {
+        return createClientHello(AgentIdentity.encode(agentIdentity), timestampMillis, challenge, credential);
     }
 
     public ClientHello decodeAndVerifyClient(byte[] encoded, byte[] credential)
@@ -110,6 +121,24 @@ public final class HandshakeProtocol {
             throw new AuthenticationException(AuthenticationException.Reason.BAD_SIGNATURE);
         }
         requireFresh(hello.timestampMillis, nowMillis, permittedClockSkewMillis);
+        return hello;
+    }
+
+    /**
+     * Production shared-key verification path. In addition to authenticating the transcript,
+     * it requires the claimed connection identity to be a canonical internal Agent UUID.
+     */
+    public ClientHello decodeAndVerifyAgent(byte[] encoded, byte[] credential,
+                                            ServerChallenge challenge, long nowMillis,
+                                            long permittedClockSkewMillis)
+            throws ProtocolException, AuthenticationException {
+        ClientHello hello = decodeAndVerifyClient(encoded, credential, challenge,
+                nowMillis, permittedClockSkewMillis);
+        try {
+            AgentIdentity.parse(hello.nodeId);
+        } catch (IllegalArgumentException exception) {
+            throw new AuthenticationException(AuthenticationException.Reason.SOURCE_MISMATCH);
+        }
         return hello;
     }
 
@@ -422,6 +451,7 @@ public final class HandshakeProtocol {
         }
 
         public String getNodeId() { return nodeId; }
+        public UUID getAgentIdentity() { return AgentIdentity.parse(nodeId); }
         public long getTimestampMillis() { return timestampMillis; }
         public byte[] getNonce() { return nonce.clone(); }
     }

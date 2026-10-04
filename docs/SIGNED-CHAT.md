@@ -94,9 +94,11 @@ without that hook the normal Paper mute check runs before routing can broadcast.
 On Bukkit without the modern Paper API the existing legacy listener remains.
 
 Proxy punishment enforcement remains enabled even if an Agent is disconnected.
-A degraded Paper Agent still denies chat using its existing runtime check, with
-no database fallback. Existing backend routing gates still require an
-acknowledged snapshot when Authority/Agent routing enforcement is configured.
+Paper `Network.FailClosed` defaults to `true`: a paired Paper Agent denies chat
+until an authenticated snapshot is ready, with no database fallback. Operators
+who explicitly set it to `false` accept enforcement from only the last known
+snapshot during an outage. Velocity does not reject backend routing based on an
+Agent UUID because the shared key does not bind that UUID to a backend name.
 SignedVelocity does not replace the authenticated AdvancedBan Agent transport.
 
 ## Regression and acceptance procedure
