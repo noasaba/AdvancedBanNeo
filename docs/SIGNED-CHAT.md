@@ -141,11 +141,13 @@ bash scripts/verify-artifacts.sh
 
 ## Validation recorded for this change (2026-10-04)
 
-`mvn -B clean verify` passed on JDK 25.0.2: core 90 passed / 2 skipped,
-Bukkit 24 passed, Bungee 5 passed, Velocity 17 passed (136 passed in total).
-The two skipped core tests require a configured MySQL integration service.
-`bash scripts/verify-artifacts.sh` passed: legacy Java 8 and Velocity Java 25
-bytecode boundaries, plugin descriptors and optional API isolation.
-The new targeted diagnostics/Proxy/Paper suite passed all 12 tests.
-No signed vanilla client or real SignedVelocity/Paper packet-chain acceptance
-run was performed; do not interpret these unit results as that runtime check.
+After integrating the latest `master` (AdvancedBan Neo 2.4.0-beta.1),
+`mvn -B -ntp clean verify` passed on JDK 25.0.2 across all six modules:
+Core 100, Bukkit 36, Bungee 5, Velocity 20; 161 passed, 0 failed, 0 errors,
+2 skipped. The skipped core tests require a configured MySQL integration
+service. `bash scripts/verify-artifacts.sh` passed for legacy Java 8 and
+Velocity Java 25 bytecode boundaries, descriptors and optional API isolation.
+The 12 targeted signed-chat diagnostics/Proxy/Paper tests passed within that
+suite. No signed vanilla client or real SignedVelocity/Paper packet-chain
+acceptance run was performed; these unit results do not establish runtime
+packet-chain compatibility.
