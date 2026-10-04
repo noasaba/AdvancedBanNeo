@@ -2,8 +2,7 @@ package me.leoko.advancedban.bukkit;
 
 import me.leoko.advancedban.Universal;
 import me.leoko.advancedban.bukkit.integration.chatsyncer.ChatSyncerIntegration;
-import me.leoko.advancedban.bukkit.listener.ChatListener;
-import me.leoko.advancedban.bukkit.listener.PaperChatListener;
+import me.leoko.advancedban.bukkit.listener.ChatListenerRegistrar;
 import me.leoko.advancedban.compatibility.SignedChatCompatibility;
 import org.bukkit.plugin.Plugin;
 import me.leoko.advancedban.bukkit.listener.CommandListener;
@@ -95,13 +94,7 @@ public class BukkitMain extends JavaPlugin {
     }
 
     private void registerChatListener() {
-        try {
-            Class.forName("io.papermc.paper.event.player.AsyncChatEvent", false, getClass().getClassLoader());
-            getServer().getPluginManager().registerEvents(
-                    new PaperChatListener(), this);
-        } catch (ClassNotFoundException unavailable) {
-            getServer().getPluginManager().registerEvents(new ChatListener(), this);
-        }
+        ChatListenerRegistrar.register(getServer().getPluginManager(), this, getClass().getClassLoader());
     }
 
     @Override
