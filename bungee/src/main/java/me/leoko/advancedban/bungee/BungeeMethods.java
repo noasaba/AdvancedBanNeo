@@ -16,6 +16,7 @@ import me.leoko.advancedban.manager.DatabaseManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.UUIDManager;
 import me.leoko.advancedban.utils.Permissionable;
+import me.leoko.advancedban.utils.FloodgateIdentity;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
 import net.md_5.bungee.api.ChatColor;
@@ -421,6 +422,13 @@ public class BungeeMethods implements MethodInterface {
     @Override
     public boolean isOnlineMode() {
         return ProxyServer.getInstance().getConfig().isOnlineMode();
+    }
+
+    @Override
+    public boolean isFloodgatePlayer(UUID uuid) {
+        Plugin floodgate = ProxyServer.getInstance().getPluginManager().getPlugin("floodgate");
+        return floodgate != null
+                && FloodgateIdentity.isFloodgatePlayer(floodgate.getClass().getClassLoader(), uuid);
     }
 
     @Override

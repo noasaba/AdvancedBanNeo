@@ -14,6 +14,7 @@ import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.UUIDManager;
 import me.leoko.advancedban.runtime.RuntimeRole;
 import me.leoko.advancedban.utils.Permissionable;
+import me.leoko.advancedban.utils.FloodgateIdentity;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.tabcompletion.TabCompleter;
 import me.leoko.advancedban.velocity.event.PunishmentEvent;
@@ -45,6 +46,7 @@ public final class VelocityMethods implements MethodInterface {
     private final Path dataDirectory;
     private volatile ConfigSnapshot files;
     private volatile boolean luckPermsAvailable;
+    private volatile boolean configCreated;
 
     VelocityMethods(VelocityMain plugin, ProxyServer proxy, Path dataDirectory) {
         this.plugin = plugin;
@@ -61,6 +63,7 @@ public final class VelocityMethods implements MethodInterface {
     public void loadFiles() {
         try {
             Files.createDirectories(dataDirectory);
+            configCreated = !Files.exists(dataDirectory.resolve("config.yml"));
             Path configFile = copyDefault("config.yml");
             Path messageFile = copyDefault("Messages.yml");
             Path layoutFile = copyDefault("Layouts.yml");
@@ -74,6 +77,10 @@ public final class VelocityMethods implements MethodInterface {
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to load AdvancedBan configuration", exception);
         }
+    }
+
+    boolean wasConfigCreated() {
+        return configCreated;
     }
 
     private Path copyDefault(String name) throws IOException {
@@ -118,7 +125,7 @@ public final class VelocityMethods implements MethodInterface {
     public String getVersion() {
         return proxy.getPluginManager().fromInstance(plugin)
                 .flatMap(container -> container.getDescription().getVersion())
-                .orElse("2.3.0");
+                .orElse("2.4.0-beta.1");
     }
 
     @Override
@@ -422,6 +429,14 @@ public final class VelocityMethods implements MethodInterface {
     @Override
     public boolean isOnlineMode() {
         return proxy.getConfiguration().isOnlineMode();
+    }
+
+    @Override
+    public boolean isFloodgatePlayer(UUID uuid) {
+        return proxy.getPluginManager().getPlugin("floodgate")
+                .flatMap(container -> container.getInstance().map(instance ->
+                        FloodgateIdentity.isFloodgatePlayer(instance.getClass().getClassLoader(), uuid)))
+                .orElse(false);
     }
 
     @Override

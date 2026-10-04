@@ -25,6 +25,7 @@ import me.leoko.advancedban.utils.PunishmentType;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -64,6 +65,22 @@ public class DatabaseTest {
         assertNull(new DatabaseManager().createPunishment(false,
                 "failed-user", "failed-user", "reason", "JUnit5", "BAN",
                 TimeManager.getTime(), -1L, null));
+    }
+
+    @Test
+    public void floodgateUuidStillMatchesLegacyOfflineNamePunishments() {
+        String legacyNameUuid = ".legacybed";
+        Punishment legacyPunishment = new Punishment(".LegacyBed", legacyNameUuid,
+                "legacy record", "JUnit5", PunishmentType.BAN, TimeManager.getTime(), -1,
+                null, -1);
+        assertTrue(legacyPunishment.createChecked(true));
+
+        InterimData loaded = PunishmentManager.get().load(".LegacyBed",
+                "0000000000000000000901fa02c95a2e", "203.0.113.51");
+
+        assertNotNull(loaded);
+        assertNotNull(loaded.getBan(), "old name-keyed ban must survive Floodgate UUID resolution");
+        assertEquals(legacyNameUuid, loaded.getBan().getUuid());
     }
 
     @Test

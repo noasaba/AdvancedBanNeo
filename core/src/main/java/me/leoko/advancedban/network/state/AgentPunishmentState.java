@@ -101,15 +101,15 @@ public final class AgentPunishmentState {
     }
 
     public boolean isMuted(String uuid, long nowMillis) {
-        return getMuteStatus(uuid, nowMillis) != MuteStatus.NOT_MUTED;
+        return getMuteStatus(uuid, nowMillis) == MuteStatus.MUTED;
     }
 
     /**
-     * Returns STATE_UNKNOWN until a full snapshot is installed. Callers must fail closed for this value.
+     * Returns STATE_UNKNOWN until a full snapshot is installed. Callers may continue with the last known state.
      */
     public MuteStatus getMuteStatus(String uuid, long nowMillis) {
         if (!snapshotReady) {
-            return MuteStatus.STATE_UNKNOWN;
+            return getActiveMute(uuid, nowMillis).isPresent() ? MuteStatus.MUTED : MuteStatus.STATE_UNKNOWN;
         }
         return getActiveMute(uuid, nowMillis).isPresent() ? MuteStatus.MUTED : MuteStatus.NOT_MUTED;
     }

@@ -133,12 +133,12 @@ class AgentPunishmentStateTest {
     }
 
     @Test
-    void startupAndDisconnectRemainFailClosedUntilFullSnapshot() {
+    void startupAndDisconnectDoNotBlockUnknownPlayers() {
         AgentPunishmentState state = new AgentPunishmentState();
 
         assertEquals(AgentPunishmentState.MuteStatus.STATE_UNKNOWN,
                 state.getMuteStatus("player-uuid", NOW));
-        assertTrue(state.isMuted("player-uuid", NOW), "unknown state must not bypass a mute");
+        assertFalse(state.isMuted("player-uuid", NOW), "unknown state must not block chat");
 
         state.replaceSnapshot(Collections.emptyList());
         assertEquals(AgentPunishmentState.MuteStatus.NOT_MUTED,
@@ -148,7 +148,20 @@ class AgentPunishmentStateTest {
         state.markUnavailable();
         assertEquals(AgentPunishmentState.MuteStatus.STATE_UNKNOWN,
                 state.getMuteStatus("player-uuid", NOW));
-        assertTrue(state.isMuted("player-uuid", NOW), "degraded state must fail closed");
+        assertFalse(state.isMuted("player-uuid", NOW), "degraded state must keep the server usable");
+    }
+
+    @Test
+    void disconnectRetainsAPreviouslyReceivedMute() {
+        AgentPunishmentState state = readyState();
+        state.apply(punishment(90L, RuntimePunishmentType.TEMP_MUTE,
+                false, NOW + 1_000L, "known mute"));
+
+        state.markUnavailable();
+
+        assertEquals(AgentPunishmentState.MuteStatus.MUTED,
+                state.getMuteStatus("player-uuid", NOW));
+        assertTrue(state.isMuted("player-uuid", NOW));
     }
 
     private AgentPunishmentState readyState() {

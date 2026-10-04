@@ -22,7 +22,8 @@ public final class ConnectionListenerVelocity {
             try {
                 UUIDManager.get().supplyInternUUID(event.getPlayer().getUsername(), event.getPlayer().getUniqueId());
                 String address = event.getPlayer().getRemoteAddress().getAddress().getHostAddress();
-                String result = Universal.get().callConnection(event.getPlayer().getUsername(), address);
+                String result = Universal.get().callConnection(event.getPlayer().getUsername(), address,
+                        event.getPlayer().getUniqueId());
                 if (result != null) {
                     event.setResult(ResultedEvent.ComponentResult.denied(LEGACY.deserialize(result)));
                 }

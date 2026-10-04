@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -25,6 +26,11 @@ public interface MethodInterface {
      */
     default RuntimeRole getRuntimeRole() {
         return RuntimeRole.STANDALONE_AUTHORITY;
+    }
+
+    /** Whether an Agent must reject enforcement-sensitive actions while Authority state is unavailable. */
+    default boolean isAgentFailClosed() {
+        return true;
     }
 
     /** Sends an Agent operation to its Authority. Legacy adapters fail closed. */
@@ -486,6 +492,11 @@ public interface MethodInterface {
      * @return the boolean
      */
     boolean isOnlineMode();
+
+    /** Whether Floodgate confirms that this login UUID belongs to a Bedrock player. */
+    default boolean isFloodgatePlayer(UUID uuid) {
+        return false;
+    }
 
     /**
      * Broadcast a message to every user with the given permission.
