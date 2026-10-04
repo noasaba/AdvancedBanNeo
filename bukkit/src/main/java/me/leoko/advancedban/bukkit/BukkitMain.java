@@ -46,6 +46,10 @@ public class BukkitMain extends JavaPlugin {
 
     private void enablePlugin() {
         PaperNetworkSettings network = PaperNetworkSettings.load(this);
+        if (network.isAgent() && !network.isFailClosed()) {
+            getLogger().warning("Network.FailClosed is false; chat may use stale Agent state during an Authority outage. "
+                    + "Set Network.FailClosed: true to deny chat until the next authenticated snapshot.");
+        }
         Plugin signed = getServer().getPluginManager().getPlugin("SignedVelocity");
         if (network.isAgent() || signed != null) {
             String warning = SignedChatCompatibility.warning(

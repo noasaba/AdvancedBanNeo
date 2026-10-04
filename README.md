@@ -32,7 +32,7 @@ See [the Authority/Agent guide](docs/AUTHORITY-AGENT.md) for pairing and ChatSyn
 
 ### Signed chat and proxy mutes
 
-For Minecraft 26.2, install matching **SignedVelocity-Proxy and SignedVelocity-Paper 1.5.0 or newer on Velocity and every Paper backend**, including when AdvancedBan runs only on Velocity. Proxy mute rejection remains active. Without the complete adapter installation, cancelling modern signed chat can disconnect muted players. Startup diagnostics report local missing or obsolete installations; they cannot verify other nodes. Paper uses its modern chat event and preserves SignedVelocity cancellation. Paper Agents default to denying chat until their authenticated snapshot is ready; `Network.FailClosed: false` is an explicit opt-out.
+For Minecraft 26.2, install matching **SignedVelocity-Proxy and SignedVelocity-Paper 1.5.0 or newer on Velocity and every Paper backend**, including when AdvancedBan runs only on Velocity. Proxy mute rejection remains active. Without the complete adapter installation, cancelling modern signed chat can disconnect muted players. Startup diagnostics report local missing or obsolete installations; they cannot verify other nodes. Paper uses its modern chat event and preserves SignedVelocity cancellation. New Paper Agent configs deny chat until their authenticated snapshot is ready. Older 2.4.0 beta configs may retain `Network.FailClosed: false`; see the guide when upgrading.
 
 See [the signed-chat guide](docs/SIGNED-CHAT.md) for the cause, version limits, installation and the two-backend acceptance procedure. Real signed-client packet behavior must be validated against the exact deployment builds.
 
