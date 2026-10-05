@@ -15,6 +15,7 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -66,6 +67,22 @@ public class PunishmentTest {
         assertTrue(PunishmentManager.get().getLoadedPunishments(false).stream().anyMatch(pt -> pt.getUuid().equals("cache")),
                 "Punishment should be cached after user is loaded");
         assertTrue(PunishmentManager.get().isBanned("cache"), "Punishment should be still active when in cache");
+    }
+
+    @Test
+    public void ipBanCreatedForOfflineNameBlocksThatAddressOnNextLogin() {
+        String name = "offlineTarget";
+        String address = "2001:db8:abcd:1234:5678:90ab:cdef:1234";
+        Punishment ipBan = new Punishment(name, address, "IP ban regression", "JUnit5",
+                PunishmentType.IP_BAN, TimeManager.getTime(), -1L, null, -1);
+
+        assertTrue(ipBan.createChecked(true));
+        ((TestMethods) Universal.get().getMethods()).setStringList("Ipban.Layout",
+                java.util.Collections.singletonList("blocked"));
+        assertNotNull(Universal.get().callConnection(name, address),
+                "a full-length IPv6 address must match an IP ban after the target reconnects");
+        assertNull(Universal.get().callConnection(name, "2001:db8:abcd:1234:5678:90ab:cdef:5678"),
+                "an IP ban must not block a different address");
     }
     
     @Test

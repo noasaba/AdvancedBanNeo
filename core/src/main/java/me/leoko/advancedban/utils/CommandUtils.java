@@ -6,6 +6,10 @@ import me.leoko.advancedban.manager.MessageManager;
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.manager.UUIDManager;
 
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+
 public class CommandUtils {
     public static Punishment getPunishment(String target, PunishmentType type) {
         return type == PunishmentType.MUTE
@@ -33,6 +37,16 @@ public class CommandUtils {
         if (name.matches("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$")) {
             return name;
         }
+		if (name.indexOf(':') >= 0) {
+		    try {
+		        InetAddress address = InetAddress.getByName(name);
+		        if (address instanceof Inet6Address) {
+		            return address.getHostAddress();
+		        }
+		    } catch (UnknownHostException ignored) {
+		        // Treat non-address input as a player name and use the cached IP below.
+		    }
+		}
 		String ip = Universal.get().getIps().get(name);
 
 		if (ip == null)

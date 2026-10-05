@@ -10,11 +10,13 @@ import javax.sql.rowset.CachedRowSet;
 import javax.sql.rowset.RowSetFactory;
 import javax.sql.rowset.RowSetProvider;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collection;
+import java.util.Locale;
 
 /**
  * The Database Manager is used to interact directly with the database is use.<br>
@@ -71,6 +73,51 @@ public class DatabaseManager {
 
         executeStatement(SQLQuery.CREATE_TABLE_PUNISHMENT);
         executeStatement(SQLQuery.CREATE_TABLE_PUNISHMENT_HISTORY);
+        ensureIpAddressColumnCapacity();
+    }
+
+    /** Expands legacy UUID columns so they can also hold full IPv6 addresses. */
+    private void ensureIpAddressColumnCapacity() {
+        HikariDataSource activeDataSource = dataSource;
+        if (activeDataSource == null) {
+            return;
+        }
+        try (Connection connection = activeDataSource.getConnection()) {
+            ensureColumnCapacity(connection, "Punishments", "uuid");
+            ensureColumnCapacity(connection, "PunishmentHistory", "uuid");
+        } catch (SQLException | RuntimeException exception) {
+            Universal.get().log("Could not expand AdvancedBan UUID columns for IPv6 addresses; IPv6 IP bans may fail.");
+            Universal.get().debugException(exception);
+        }
+    }
+
+    private void ensureColumnCapacity(Connection connection, String table, String column) throws SQLException {
+        int size = getColumnSize(connection.getMetaData(), connection.getCatalog(), table, column);
+        if (size >= 45) {
+            return;
+        }
+        String statement = useMySQL
+                ? "ALTER TABLE `" + table + "` MODIFY COLUMN `" + column + "` VARCHAR(45) NULL DEFAULT NULL"
+                : "ALTER TABLE " + table + " ALTER COLUMN " + column + " SET DATA TYPE VARCHAR(45)";
+        try (PreparedStatement alter = connection.prepareStatement(statement)) {
+            alter.executeUpdate();
+        }
+    }
+
+    private int getColumnSize(DatabaseMetaData metadata, String catalog, String table, String column)
+            throws SQLException {
+        String[] tableNames = {table, table.toUpperCase(Locale.ROOT), table.toLowerCase(Locale.ROOT)};
+        String[] columnNames = {column, column.toUpperCase(Locale.ROOT), column.toLowerCase(Locale.ROOT)};
+        for (String tableName : tableNames) {
+            for (String columnName : columnNames) {
+                try (ResultSet columns = metadata.getColumns(catalog, null, tableName, columnName)) {
+                    if (columns.next()) {
+                        return columns.getInt("COLUMN_SIZE");
+                    }
+                }
+            }
+        }
+        throw new SQLException("Could not find " + table + "." + column + " after schema initialization");
     }
 
     /**

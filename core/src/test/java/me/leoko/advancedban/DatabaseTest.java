@@ -2,6 +2,10 @@ package me.leoko.advancedban;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -53,6 +57,37 @@ public class DatabaseTest {
     @Test
     public void shutdownIsSafeWhenDataSourceSetupFailed() {
         assertDoesNotThrow(() -> new DatabaseManager().shutdown());
+    }
+
+    @Test
+    public void legacyIpBanColumnsAreExpandedForIpv6Addresses() throws Exception {
+        DatabaseManager manager = DatabaseManager.get();
+        Field dataSourceField = DatabaseManager.class.getDeclaredField("dataSource");
+        dataSourceField.setAccessible(true);
+        com.zaxxer.hikari.HikariDataSource dataSource =
+                (com.zaxxer.hikari.HikariDataSource) dataSourceField.get(manager);
+
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE Punishments ALTER COLUMN uuid SET DATA TYPE VARCHAR(35)");
+            statement.execute("ALTER TABLE PunishmentHistory ALTER COLUMN uuid SET DATA TYPE VARCHAR(35)");
+        }
+
+        Method migration = DatabaseManager.class.getDeclaredMethod("ensureIpAddressColumnCapacity");
+        migration.setAccessible(true);
+        migration.invoke(manager);
+
+        try (Connection connection = dataSource.getConnection()) {
+            assertEquals(45, columnSize(connection, "PUNISHMENTS", "UUID"));
+            assertEquals(45, columnSize(connection, "PUNISHMENTHISTORY", "UUID"));
+        }
+    }
+
+    private static int columnSize(Connection connection, String table, String column) throws Exception {
+        try (ResultSet columns = connection.getMetaData().getColumns(
+                connection.getCatalog(), null, table, column)) {
+            assertTrue(columns.next(), "expected schema column " + table + "." + column);
+            return columns.getInt("COLUMN_SIZE");
+        }
     }
 
     @Test

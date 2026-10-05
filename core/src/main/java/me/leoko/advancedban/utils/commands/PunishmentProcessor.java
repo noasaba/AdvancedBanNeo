@@ -77,6 +77,7 @@ public class PunishmentProcessor implements Consumer<Command.CommandInput> {
             return;
         }
         if (result.getStatus() != DatabaseManager.PunishmentCreationResult.Status.CREATED) {
+            MessageManager.sendMessage(input.getSender(), "General.PunishmentCreationFailed", true);
             return;
         }
 

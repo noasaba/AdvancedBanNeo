@@ -10,7 +10,7 @@ public enum SQLQuery {
             "CREATE TABLE IF NOT EXISTS `Punishments` ("+
             "`id` int NOT NULL AUTO_INCREMENT," +
             "`name` VARCHAR(16) NULL DEFAULT NULL," +
-            "`uuid` VARCHAR(35) NULL DEFAULT NULL," +
+            "`uuid` VARCHAR(45) NULL DEFAULT NULL," +
             "`reason` VARCHAR(255) NULL DEFAULT NULL," +
             "`operator` VARCHAR(16) NULL DEFAULT NULL," +
             "`punishmentType` VARCHAR(16) NULL DEFAULT NULL," +
@@ -22,7 +22,7 @@ public enum SQLQuery {
             "CREATE TABLE IF NOT EXISTS Punishments (" +
             "id INTEGER IDENTITY PRIMARY KEY," +
             "name VARCHAR(16)," +
-            "uuid VARCHAR(35)," +
+            "uuid VARCHAR(45)," +
             "reason VARCHAR(255)," +
             "operator VARCHAR(16)," +
             "punishmentType VARCHAR(16)," +
@@ -34,7 +34,7 @@ public enum SQLQuery {
             "CREATE TABLE IF NOT EXISTS `PunishmentHistory` (" +
             "`id` int NOT NULL AUTO_INCREMENT," +
             "`name` VARCHAR(16) NULL DEFAULT NULL," +
-            "`uuid` VARCHAR(35) NULL DEFAULT NULL," +
+            "`uuid` VARCHAR(45) NULL DEFAULT NULL," +
             "`reason` VARCHAR(255) NULL DEFAULT NULL," +
             "`operator` VARCHAR(16) NULL DEFAULT NULL," +
             "`punishmentType` VARCHAR(16) NULL DEFAULT NULL," +
@@ -46,7 +46,7 @@ public enum SQLQuery {
             "CREATE TABLE IF NOT EXISTS PunishmentHistory (" +
             "id INTEGER IDENTITY PRIMARY KEY," +
             "name VARCHAR(16)," +
-            "uuid VARCHAR(35)," +
+            "uuid VARCHAR(45)," +
             "reason VARCHAR(255)," +
             "operator VARCHAR(16)," +
             "punishmentType VARCHAR(16)," +

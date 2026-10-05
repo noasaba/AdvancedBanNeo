@@ -8,6 +8,7 @@ General:
   TimeLayoutM: "%M%min and %S%sec"
   TimeLayoutS: "%S% seconds"
   FailedFetch: "&cCould not fetch the UUID of %NAME%! See console for details."
+  PunishmentCreationFailed: "&cThe punishment was not saved. Check the server console for the database error."
 
 
 Ban:
