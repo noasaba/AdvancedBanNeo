@@ -25,6 +25,7 @@ public class PunishmentManager {
     private final AtomicBoolean refreshingOnlinePlayers = new AtomicBoolean();
     private final Object cacheRefreshLock = new Object();
     private volatile boolean agentSnapshotReady;
+    private volatile boolean agentSnapshotPreviouslyReady;
     
     private Universal universal() {
     	return Universal.get();
@@ -77,7 +78,10 @@ public class PunishmentManager {
         boolean hasLegacyNameUuid = legacyNameUuid != null && !legacyNameUuid.isEmpty()
                 && !matches(legacyNameUuid, uuid);
         if (universal().getRuntimeRole().isAgent()) {
-            if (!agentSnapshotReady) {
+            // A disconnected Agent keeps enforcing the last complete active snapshot.
+            // Before the first complete snapshot, there is no trustworthy local state,
+            // so retain the existing lockdown behavior.
+            if (!agentSnapshotReady && !agentSnapshotPreviouslyReady) {
                 return null;
             }
             Set<Punishment> current = new HashSet<>();
@@ -594,6 +598,9 @@ public class PunishmentManager {
             history = replacementHistory;
             cached.clear();
             agentSnapshotReady = ready;
+            if (ready) {
+                agentSnapshotPreviouslyReady = true;
+            }
         }
     }
 
@@ -618,6 +625,7 @@ public class PunishmentManager {
         }
         synchronized (cacheRefreshLock) {
             agentSnapshotReady = true;
+            agentSnapshotPreviouslyReady = true;
         }
     }
 

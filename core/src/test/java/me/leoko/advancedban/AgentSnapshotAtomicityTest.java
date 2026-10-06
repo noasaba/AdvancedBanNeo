@@ -2,6 +2,7 @@ package me.leoko.advancedban;
 
 import me.leoko.advancedban.manager.PunishmentManager;
 import me.leoko.advancedban.runtime.RuntimeRole;
+import me.leoko.advancedban.utils.InterimData;
 import me.leoko.advancedban.utils.Punishment;
 import me.leoko.advancedban.utils.PunishmentType;
 import me.leoko.advancedban.utils.SQLQuery;
@@ -24,6 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentSnapshotAtomicityTest {
@@ -38,11 +41,13 @@ class AgentSnapshotAtomicityTest {
     private Field punishmentsField;
     private Field historyField;
     private Field readyField;
+    private Field previouslyReadyField;
     private RuntimeRole oldRole;
     private MethodInterface oldMethods;
     private Object oldPunishments;
     private Object oldHistory;
     private boolean oldReady;
+    private boolean oldPreviouslyReady;
 
     @BeforeEach
     void installIsolatedAgentContext() throws Exception {
@@ -51,6 +56,7 @@ class AgentSnapshotAtomicityTest {
         punishmentsField = field(PunishmentManager.class, "punishments");
         historyField = field(PunishmentManager.class, "history");
         readyField = field(PunishmentManager.class, "agentSnapshotReady");
+        previouslyReadyField = field(PunishmentManager.class, "agentSnapshotPreviouslyReady");
 
         Universal universal = Universal.get();
         PunishmentManager manager = PunishmentManager.get();
@@ -59,8 +65,10 @@ class AgentSnapshotAtomicityTest {
         oldPunishments = punishmentsField.get(manager);
         oldHistory = historyField.get(manager);
         oldReady = readyField.getBoolean(manager);
+        oldPreviouslyReady = previouslyReadyField.getBoolean(manager);
         roleField.set(universal, RuntimeRole.AGENT_DEGRADED);
         methodsField.set(universal, new TestMethods(dataFolder));
+        previouslyReadyField.setBoolean(manager, false);
     }
 
     @AfterEach
@@ -70,6 +78,7 @@ class AgentSnapshotAtomicityTest {
         punishmentsField.set(manager, oldPunishments);
         historyField.set(manager, oldHistory);
         readyField.setBoolean(manager, oldReady);
+        previouslyReadyField.setBoolean(manager, oldPreviouslyReady);
         roleField.set(universal, oldRole);
         methodsField.set(universal, oldMethods);
     }
@@ -221,6 +230,32 @@ class AgentSnapshotAtomicityTest {
 
         manager.completeAgentSnapshotSynchronization();
         assertTrue(manager.isAgentSnapshotReady());
+    }
+
+    @Test
+    void disconnectedAgentContinuesLoginChecksAgainstLastCompleteSnapshot() {
+        PunishmentManager manager = PunishmentManager.get();
+        String uuid = "0123456789abcdef0123456789abcdef";
+        Punishment ban = new Punishment("Player", uuid, "reason", "Authority",
+                PunishmentType.BAN, System.currentTimeMillis(), -1L, null, 91);
+        manager.replaceAgentSnapshot(java.util.Collections.singletonList(ban));
+
+        manager.markAgentSnapshotUnavailable();
+
+        assertFalse(manager.isAgentSnapshotReady());
+        InterimData data = manager.load("Player", uuid, "192.0.2.10");
+        assertNotNull(data, "disconnecting must not turn a known snapshot into a generic load failure");
+        assertNotNull(data.getBan(), "the last complete snapshot must still enforce active bans");
+        assertEquals(91, data.getBan().getId());
+    }
+
+    @Test
+    void agentWithoutAnyCompleteSnapshotStillReportsUnavailableState() {
+        PunishmentManager manager = PunishmentManager.get();
+
+        assertFalse(manager.isAgentSnapshotReady());
+        assertNull(manager.load("Player", "0123456789abcdef0123456789abcdef", "192.0.2.10"),
+                "a new Agent must not treat an empty pre-sync state as authoritative");
     }
 
     private List<Punishment> snapshot(int size, int idOffset) {
